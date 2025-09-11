@@ -1,0 +1,60 @@
+# --- OS / Editor ---
+.DS_Store
+.idea/
+.vscode/
+.history/
+
+# --- Python bytecode / caches ---
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.cache/
+
+# --- Virtual environments (do NOT ignore project `env/` module) ---
+.venv/
+venv/
+.env
+.env.*
+.python-version
+
+# --- Build / packaging ---
+build/
+dist/
+downloads/
+eggs/
+.eggs/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+
+# --- Coverage / test reports ---
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# --- Logs ---
+logs/
+*.log
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+
+# --- ML/LLM artifacts & caches ---
+hf_cache/
+artifacts/
+trainer_output/
+wandb/
+
+# --- Run outputs ---
+outputs/
+
+
