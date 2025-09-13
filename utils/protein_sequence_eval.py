@@ -168,7 +168,7 @@ def sample_entropy_and_validity(
     top_p: float = 1.0,
     top_k: int = 0,
     temperature: float = 1.0,
-) -> Tuple[float, List[Tuple[str, float]], float, List[Tuple[str, float]]]:
+) -> Tuple[float, float, List[Tuple[str, float]], float, List[Tuple[str, float]]]:
     model_dev = next(model.parameters()).device
     start_id = tokenizer.bos_token_id if tokenizer.bos_token_id is not None else tokenizer.eos_token_id
     queries = torch.tensor([[start_id]] * num_samples, dtype=torch.long, device=model_dev)
@@ -232,18 +232,46 @@ def sample_entropy_and_validity(
     # Monte Carlo entropy estimator on sampled token paths only (no padding in NLL)
     # H ≈ -(1/N) * sum_i log q(path_i), where path_i is the generated tokenization up to EOS
     H_hat = float("nan")
+    H_valid_hat = float("nan")
+    # Compute NLL in chunks to avoid allocating a full [B, T, V] tensor on device
     with torch.no_grad():
-        logits = model(input_ids=responses, attention_mask=attn).logits
-        log_probs = torch.nn.functional.log_softmax(logits[:, :-1, :], dim=-1)
-        targets = responses[:, 1:]
-        tgt_mask = attn[:, 1:]
-        token_logps = log_probs.gather(-1, targets.unsqueeze(-1)).squeeze(-1)
-        token_logps = token_logps * tgt_mask
-        seq_logps = token_logps.sum(dim=1)
-        H_hat = float((-seq_logps).mean().item())
+        total_batch = responses.size(0)
+        # Use smaller chunks on MPS to reduce peak memory
+        if model_dev.type == "mps":
+            chunk_size = 256
+        elif model_dev.type == "cuda":
+            chunk_size = 256
+        else:
+            chunk_size = 64
+        targets_all = []
+        nll_sums: List[torch.Tensor] = []
+        for start in range(0, total_batch, chunk_size):
+            end = min(total_batch, start + chunk_size)
+            resp_chunk = responses[start:end]
+            attn_chunk = attn[start:end]
+            logits_chunk = model(input_ids=resp_chunk, attention_mask=attn_chunk).logits
+            logits_chunk = logits_chunk[:, :-1, :].contiguous()
+            targets_chunk = resp_chunk[:, 1:].contiguous()
+            mask_chunk = attn_chunk[:, 1:].contiguous()
+            loss_per_pos = torch.nn.functional.cross_entropy(
+                logits_chunk.view(-1, logits_chunk.size(-1)),
+                targets_chunk.view(-1),
+                reduction="none",
+            )
+            loss_per_pos = loss_per_pos.view_as(targets_chunk)
+            loss_per_pos = loss_per_pos * mask_chunk
+            nll_sums.append(loss_per_pos.sum(dim=1))
+        seq_neg_logps = torch.cat(nll_sums, dim=0)
+        H_hat = float(seq_neg_logps.mean().item())
+        # Valid-only entropy (mean NLL over sequences with validity==1)
+        valid_indices = [i for i, (_, v01) in enumerate(per_sample_validity) if v01 >= 1.0]
+        if len(valid_indices) > 0:
+            H_valid_hat = float(seq_neg_logps[valid_indices].mean().item())
+        else:
+            H_valid_hat = float("nan")
     mean_validity = float(validity_sum / max(1, N))
     mean_token_len = float(total_token_len_pre_eos / max(1, N))
     mean_residue_len = float(total_residue_len_raw / max(1, N))
-    return H_hat, sorted(seq_list, key=lambda x: -x[1]), mean_validity, per_sample_validity, mean_token_len, mean_residue_len
+    return H_hat, H_valid_hat, sorted(seq_list, key=lambda x: -x[1]), mean_validity, per_sample_validity, mean_token_len, mean_residue_len
 
 

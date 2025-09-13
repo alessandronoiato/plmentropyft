@@ -139,7 +139,7 @@ def main():
         generation_batch_size=None,
         beta=args.beta,
         sync_ref_model=True,
-        ref_model_sync_steps=1,
+        ref_model_sync_steps=20,
         ref_model_mixup_alpha=1.0,
         remove_unused_columns=False,
         report_to=[],
@@ -147,6 +147,7 @@ def main():
         logging_steps=1,
         use_transformers_paged=False,
         use_vllm=False,
+        scale_rewards="none"
     )
 
     # Dataset of prompts: use explicit BOS token to guarantee non-empty inputs
@@ -163,6 +164,7 @@ def main():
         renorm_over_allowed=False,
         base_ref_model=base_model,
         first_variation_coef=args.first_variation_coef,
+        out_dir=args.out_dir,
     )
 
     # Trainer
@@ -188,6 +190,7 @@ def main():
             renorm_over_allowed=False,
             base_ref_model=base_model,
             first_variation_coef=args.first_variation_coef,
+            out_dir=args.out_dir,
         )
     ]
     trainer.reward_func_names = ["self_surprise_ref_k"]
@@ -197,7 +200,7 @@ def main():
     # BEFORE distribution (initial policy)
     def dump_sequence_probs(model, csv_path, validity_csv_path):
         # Monte Carlo estimate of distribution and entropy without legality constraints
-        H, seqs, mean_valid, per_valid, mean_token_len, mean_residue_len = sample_entropy_and_validity(
+        H, H_valid, seqs, mean_valid, per_valid, mean_token_len, mean_residue_len = sample_entropy_and_validity(
             model,
             tok,
             args.horizon,
@@ -219,12 +222,12 @@ def main():
             for s, v in per_valid:
                 # Ensure CSV reflects the 0/1 oracle already used during sampling
                 w.writerow([s, int(v)])
-        return H, seqs, mean_valid, mean_token_len, mean_residue_len
+        return H, H_valid, seqs, mean_valid, mean_token_len, mean_residue_len
 
     model_before = trainer.accelerator.unwrap_model(trainer.model)
     before_csv = os.path.join(args.out_dir, "before_sequence_probs.csv")
     before_valid_csv = os.path.join(args.out_dir, "before_validity.csv")
-    H_before, seqs_before, V_before, Ltok_before, Lres_before = dump_sequence_probs(model_before, before_csv, before_valid_csv)
+    H_before, H_before_valid, seqs_before, V_before, Ltok_before, Lres_before = dump_sequence_probs(model_before, before_csv, before_valid_csv)
 
     # Save exact entropy before finetuning if available
     with open(os.path.join(args.out_dir, "before_exact_entropy.json"), "w") as f:
@@ -238,7 +241,7 @@ def main():
         model_eval = trainer.accelerator.unwrap_model(trainer.model)
         after_csv = os.path.join(args.out_dir, "after_sequence_probs.csv")
         after_valid_csv = os.path.join(args.out_dir, "after_validity.csv")
-        H_after, seqs_after, V_after, Ltok_after, Lres_after = dump_sequence_probs(model_eval, after_csv, after_valid_csv)
+        H_after, H_after_valid, seqs_after, V_after, Ltok_after, Lres_after = dump_sequence_probs(model_eval, after_csv, after_valid_csv)
 
     report = {
         "horizon": args.horizon,
@@ -246,6 +249,8 @@ def main():
         "num_sequences_after": len(seqs_after),
         "before_entropy_nats": float(H_before),
         "after_entropy_nats": float(H_after),
+        "before_entropy_nats_valid_only": float(H_before_valid),
+        "after_entropy_nats_valid_only": float(H_after_valid),
         "before_mean_validity": float(V_before),
         "after_mean_validity": float(V_after),
         "before_mean_token_length_to_eos": float(Ltok_before),

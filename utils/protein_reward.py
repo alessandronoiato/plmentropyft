@@ -17,6 +17,7 @@ def make_self_surprise_reward(
     renorm_over_allowed: bool = True,
     base_ref_model=None,
     first_variation_coef: float = 0.0,
+    out_dir: Optional[str] = None,
 ):
     """Create a reward function for TRL GRPO.
 
@@ -24,12 +25,14 @@ def make_self_surprise_reward(
       R = -log p_ref(seq) - first_variation_coef * (log p_pol(seq) - log p_base(seq))
 
     Also logs in-update approximate KL: mean(log p_pol - log p_ref) per batch to
-    outputs/grpo_approx_kl_in_update.csv.
+    {out_dir}/grpo_approx_kl_in_update.csv (defaults to project outputs dir).
     """
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    out_dir = os.path.join(project_root, "outputs")
-    os.makedirs(out_dir, exist_ok=True)
-    kl_path = os.path.join(out_dir, "grpo_approx_kl_in_update.csv")
+    default_out_dir = os.path.join(project_root, "outputs")
+    out_dir_path = out_dir or default_out_dir
+    os.makedirs(out_dir_path, exist_ok=True)
+    kl_path = os.path.join(out_dir_path, "grpo_approx_kl_in_update.csv")
+    fv_path = os.path.join(out_dir_path, "grpo_first_variation_in_update.csv")
 
     def _append_approx_kl(value: float) -> None:
         exists = os.path.exists(kl_path)
@@ -38,6 +41,15 @@ def make_self_surprise_reward(
             if not exists:
                 w.writerow(["approx_kl_in_update"])  # header
             w.writerow([float(value)])
+
+    def _append_first_variation(batch_mean_logp_pol: float, batch_mean_logp_base: float, coef: float) -> None:
+        exists = os.path.exists(fv_path)
+        with open(fv_path, "a", newline="") as f:
+            w = csv.writer(f)
+            if not exists:
+                w.writerow(["mean_logp_pol", "mean_logp_base", "first_variation_coef", "penalty_value"])  # header
+            penalty = coef * (batch_mean_logp_pol - batch_mean_logp_base)
+            w.writerow([float(batch_mean_logp_pol), float(batch_mean_logp_base), float(coef), float(penalty)])
 
     def _batched_reward(prompts, completion_ids) -> List[float]:
         ref = trainer.ref_model if getattr(trainer, "ref_model", None) is not None else trainer.model
@@ -90,6 +102,12 @@ def make_self_surprise_reward(
                 aa_ids,
                 id_eos,
                 renorm_over_allowed=renorm_over_allowed,
+            )
+            # Log batch means for first-variation contribution
+            _append_first_variation(
+                batch_mean_logp_pol=float(seq_logp_pol.mean().item()),
+                batch_mean_logp_base=float(seq_logp_base.mean().item()),
+                coef=float(first_variation_coef),
             )
             total = total - first_variation_coef * (seq_logp_pol - seq_logp_base)
         return total.float().cpu().tolist()
