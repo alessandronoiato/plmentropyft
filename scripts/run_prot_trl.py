@@ -71,10 +71,7 @@ def main():
 
     # Prefer NVIDIA GPU if available, otherwise CPU
     device = get_preferred_device()
-    try:
-        torch.set_default_device(device)
-    except Exception:
-        pass
+    # Do not set a global default device; Accelerate/TRL manages device placement.
 
     # Tokenizer and models
     # If a local path is provided, force offline load
