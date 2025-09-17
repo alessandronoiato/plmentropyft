@@ -1,4 +1,4 @@
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional, Any
 
 import math
 import torch
@@ -168,7 +168,13 @@ def sample_entropy_and_validity(
     top_p: float = 1.0,
     top_k: int = 0,
     temperature: float = 1.0,
-) -> Tuple[float, float, List[Tuple[str, float]], float, List[Tuple[str, float]]]:
+    validity_mode: str = "basic",
+    fold_device: str = "cpu",
+    fold_batch_size: int = 1,
+    fold_plddt_threshold: float = 70.0,
+    eval_samples_fold_max: Optional[int] = None,
+    fold_cache_dir: Optional[str] = None,
+) -> Tuple[float, float, List[Tuple[str, float]], float, List[Dict[str, Any]], float, float]:
     model_dev = next(model.parameters()).device
     start_id = tokenizer.bos_token_id if tokenizer.bos_token_id is not None else tokenizer.eos_token_id
     queries = torch.tensor([[start_id]] * num_samples, dtype=torch.long, device=model_dev)
@@ -201,7 +207,8 @@ def sample_entropy_and_validity(
     seq_counts: Dict[str, int] = {}
     validity_sum = 0.0
     residue_strs: List[str] = []
-    per_sample_validity: List[Tuple[str, float]] = []
+    per_sample_validity_basic: List[Tuple[str, float]] = []
+    per_sample_records: List[Dict[str, Any]] = []
     total_token_len_pre_eos = 0.0
     total_residue_len_raw = 0.0
     for i in range(responses.size(0)):
@@ -219,9 +226,8 @@ def sample_entropy_and_validity(
         s = s_raw
         # No truncation/padding: validity and CSV are based on full raw decoded residues
         seq_counts[s] = seq_counts.get(s, 0) + 1
-        v01 = float(is_valid_basic(s, min_len=1, max_len=10_000, allow_U=False, allow_Cdot=True, max_run=6))
-        validity_sum += v01
-        per_sample_validity.append((s, v01))
+        # validity computed later to keep exclusivity between modes
+        per_sample_validity_basic.append((s, 0.0))
         residue_strs.append(s)
     N = sum(seq_counts.values())
     seq_list: List[Tuple[str, float]] = []
@@ -263,15 +269,82 @@ def sample_entropy_and_validity(
             nll_sums.append(loss_per_pos.sum(dim=1))
         seq_neg_logps = torch.cat(nll_sums, dim=0)
         H_hat = float(seq_neg_logps.mean().item())
-        # Valid-only entropy (mean NLL over sequences with validity==1)
-        valid_indices = [i for i, (_, v01) in enumerate(per_sample_validity) if v01 >= 1.0]
+        # Valid-only entropy (mean NLL over sequences with validity==1) - computed after setting v01 per mode
+        valid_indices: List[int] = []
+        # Defer selection until validity per mode is computed below
         if len(valid_indices) > 0:
             H_valid_hat = float(seq_neg_logps[valid_indices].mean().item())
         else:
             H_valid_hat = float("nan")
-    mean_validity = float(validity_sum / max(1, N))
+    # Compute validity according to mode
+    # Default: basic
+    if validity_mode == "basic":
+        validity_sum = 0.0
+        per_sample_records = []
+        for s in residue_strs:
+            v01 = float(is_valid_basic(s, min_len=1, max_len=10_000, allow_U=False, allow_Cdot=True, max_run=6))
+            validity_sum += v01
+            per_sample_records.append({"sequence": s, "valid": int(v01)})
+        mean_validity = float(validity_sum / max(1, N))
+        # Build valid indices for H_valid_hat
+        valid_indices = [i for i, rec in enumerate(per_sample_records) if rec.get("valid", 0) == 1]
+        if 'seq_neg_logps' in locals() and len(valid_indices) > 0:
+            H_valid_hat = float(seq_neg_logps[valid_indices].mean().item())
+        else:
+            H_valid_hat = float("nan")
+    elif validity_mode == "esmfold":
+        # Optional cap on fold evaluation to control runtime; default None = all
+        from .fold_validity import fold_plddt_stats
+        eval_indices = list(range(len(residue_strs)))
+        if eval_samples_fold_max is not None and eval_samples_fold_max > 0 and eval_samples_fold_max < len(eval_indices):
+            eval_indices = eval_indices[: eval_samples_fold_max]
+        seqs_for_fold = [residue_strs[i] for i in eval_indices]
+        stats_list = fold_plddt_stats(
+            seqs_for_fold,
+            device=fold_device,
+            dtype="float32",
+            batch_size=max(1, fold_batch_size),
+            cache_dir=fold_cache_dir,
+            timeout_s=None,
+        )
+        # Map back to full list; default invalid for non-evaluated
+        per_sample_records = []
+        validity_sum = 0.0
+        fold_mean_vals: List[float] = []
+        idx_to_stats = {eval_indices[i]: stats_list[i] for i in range(len(eval_indices))}
+        for i, s in enumerate(residue_strs):
+            st = idx_to_stats.get(i)
+            if st is None:
+                rec = {"sequence": s, "valid": 0, "fold_ok": False, "plddt_mean": None, "plddt_median": None, "fold_error": "not_evaluated"}
+            else:
+                ok = bool(st.get("ok", False))
+                mean_plddt = st.get("mean_plddt")
+                median_plddt = st.get("median_plddt")
+                valid01 = 1 if ok and (mean_plddt is not None) and (float(mean_plddt) >= float(fold_plddt_threshold)) else 0
+                if mean_plddt is not None:
+                    fold_mean_vals.append(float(mean_plddt))
+                rec = {
+                    "sequence": s,
+                    "valid": int(valid01),
+                    "fold_ok": ok,
+                    "plddt_mean": None if mean_plddt is None else float(mean_plddt),
+                    "plddt_median": None if median_plddt is None else float(median_plddt),
+                    "fold_error": st.get("error"),
+                }
+                validity_sum += float(valid01)
+            per_sample_records.append(rec)
+        mean_validity = float(validity_sum / max(1, N))
+        # Build valid indices for H_valid_hat
+        valid_indices = [i for i, rec in enumerate(per_sample_records) if rec.get("valid", 0) == 1]
+        if 'seq_neg_logps' in locals() and len(valid_indices) > 0:
+            H_valid_hat = float(seq_neg_logps[valid_indices].mean().item())
+        else:
+            H_valid_hat = float("nan")
+    else:
+        raise ValueError(f"unknown validity_mode: {validity_mode}")
+
     mean_token_len = float(total_token_len_pre_eos / max(1, N))
     mean_residue_len = float(total_residue_len_raw / max(1, N))
-    return H_hat, H_valid_hat, sorted(seq_list, key=lambda x: -x[1]), mean_validity, per_sample_validity, mean_token_len, mean_residue_len
+    return H_hat, H_valid_hat, sorted(seq_list, key=lambda x: -x[1]), mean_validity, per_sample_records, mean_token_len, mean_residue_len
 
 

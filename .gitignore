@@ -58,3 +58,8 @@ wandb/
 outputs/
 
 
+# --- Folding caches/outputs ---
+fold_cache/
+fold_outputs/
+
+

@@ -61,6 +61,14 @@ def main():
     parser.add_argument("--local_files_only", action="store_true", default=False)
     parser.add_argument("--enumerate_max_horizon", type=int, default=3, help="(deprecated) kept for compatibility; enumeration disabled")
     parser.add_argument("--tokenizer_mode", type=str, default="letters", choices=["letters", "pieces"], help="(deprecated) kept for compatibility")
+    # Validity mode and ESMFold controls
+    parser.add_argument("--validity_mode", type=str, default="basic", choices=["basic", "esmfold"], help="Choose validity oracle (mutually exclusive)")
+    parser.add_argument("--prefilter_mode", type=str, default="none", choices=["none", "basic", "esmfold"], help="Optional prefilter; default none")
+    parser.add_argument("--fold_plddt_threshold", type=float, default=70.0)
+    parser.add_argument("--fold_device", type=str, default="cpu", choices=["cpu", "cuda", "auto"])
+    parser.add_argument("--fold_batch_size", type=int, default=1)
+    parser.add_argument("--fold_cache_dir", type=str, default=None)
+    parser.add_argument("--eval_samples_fold_max", type=int, default=None)
     args = parser.parse_args()
 
     if GRPOTrainer is None or GRPOConfig is None:
@@ -197,6 +205,10 @@ def main():
     # BEFORE distribution (initial policy)
     def dump_sequence_probs(model, csv_path, validity_csv_path):
         # Monte Carlo estimate of distribution and entropy without legality constraints
+        # Determine fold device
+        fold_device = args.fold_device
+        if fold_device == "auto":
+            fold_device = "cuda" if (torch.cuda.is_available() and torch.cuda.device_count() > 0) else "cpu"
         H, H_valid, seqs, mean_valid, per_valid, mean_token_len, mean_residue_len = sample_entropy_and_validity(
             model,
             tok,
@@ -206,6 +218,12 @@ def main():
             top_p=args.eval_top_p,
             top_k=args.eval_top_k,
             temperature=args.eval_temperature,
+            validity_mode=args.validity_mode,
+            fold_device=fold_device,
+            fold_batch_size=args.fold_batch_size,
+            fold_plddt_threshold=args.fold_plddt_threshold,
+            eval_samples_fold_max=args.eval_samples_fold_max,
+            fold_cache_dir=args.fold_cache_dir,
         )
         os.makedirs(os.path.dirname(csv_path), exist_ok=True)
         with open(csv_path, "w", newline="") as f:
@@ -215,10 +233,22 @@ def main():
                 w.writerow([a, p])
         with open(validity_csv_path, "w", newline="") as f:
             w = csv.writer(f)
-            w.writerow(["sequence", "valid"])  # binary oracle
-            for s, v in per_valid:
-                # Ensure CSV reflects the 0/1 oracle already used during sampling
-                w.writerow([s, int(v)])
+            # Header depends on validity mode
+            if args.validity_mode == "esmfold":
+                w.writerow(["sequence", "valid", "plddt_mean", "plddt_median", "fold_ok", "fold_error"])  # esmfold stats
+                for rec in per_valid:
+                    w.writerow([
+                        rec.get("sequence", ""),
+                        int(rec.get("valid", 0)),
+                        rec.get("plddt_mean"),
+                        rec.get("plddt_median"),
+                        rec.get("fold_ok"),
+                        rec.get("fold_error"),
+                    ])
+            else:
+                w.writerow(["sequence", "valid"])  # basic oracle
+                for rec in per_valid:
+                    w.writerow([rec.get("sequence", ""), int(rec.get("valid", 0))])
         return H, H_valid, seqs, mean_valid, mean_token_len, mean_residue_len
 
     model_before = trainer.accelerator.unwrap_model(trainer.model)
@@ -260,6 +290,40 @@ def main():
         "sum_probs_before": sum(p for _, p in seqs_before) if seqs_before else float("nan"),
         "sum_probs_after": sum(p for _, p in seqs_after) if seqs_after else float("nan"),
     }
+    # When esmfold validity is active, summarize pLDDT
+    if args.validity_mode == "esmfold":
+        import statistics as stats
+        def _mean_plddt_from_records(records: List[dict]):
+            vals = [r.get("plddt_mean") for r in records if r.get("plddt_mean") is not None]
+            return float(sum(vals) / len(vals)) if len(vals) > 0 else float("nan")
+        # Reload the per-records from CSVs for simplicity
+        before_valid_csv = os.path.join(args.out_dir, "before_validity.csv")
+        after_valid_csv = os.path.join(args.out_dir, "after_validity.csv")
+        def _load_plddt(path: str) -> List[dict]:
+            out: List[dict] = []
+            try:
+                with open(path, "r") as f:
+                    rr = csv.reader(f)
+                    header = next(rr, None)
+                    for row in rr:
+                        if len(row) >= 6:
+                            out.append({
+                                "sequence": row[0],
+                                "valid": int(row[1]),
+                                "plddt_mean": None if row[2] == '' else float(row[2]),
+                                "plddt_median": None if row[3] == '' else float(row[3]),
+                                "fold_ok": row[4] == 'True',
+                                "fold_error": row[5] if row[5] else None,
+                            })
+            except Exception:
+                pass
+            return out
+        before_recs = _load_plddt(before_valid_csv)
+        after_recs = _load_plddt(after_valid_csv)
+        report.update({
+            "before_mean_plddt": _mean_plddt_from_records(before_recs),
+            "after_mean_plddt": _mean_plddt_from_records(after_recs),
+        })
     with open(os.path.join(args.out_dir, "grpo_exact_entropy.json"), "w") as f:
         json.dump(report, f, indent=2)
     # 'after_sequence_probs.csv' already written by dump_sequence_probs
