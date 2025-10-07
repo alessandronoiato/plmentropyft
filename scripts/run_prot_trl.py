@@ -69,6 +69,14 @@ def main():
     parser.add_argument("--fold_batch_size", type=int, default=1)
     parser.add_argument("--fold_cache_dir", type=str, default=None)
     parser.add_argument("--eval_samples_fold_max", type=int, default=None)
+    # Optional Vendi diversity (ESM2 embeddings)
+    parser.add_argument("--compute_vendi", action="store_true", default=False)
+    parser.add_argument("--vendi_model", type=str, default="esm2_t33_650M_UR50D")
+    parser.add_argument("--vendi_device", type=str, default="auto", choices=["cpu", "cuda", "auto"])
+    parser.add_argument("--vendi_batch_size", type=int, default=16)
+    parser.add_argument("--vendi_kernel", type=str, default="cosine", choices=["cosine", "rbf"])
+    parser.add_argument("--vendi_sigma", type=float, default=None)
+    parser.add_argument("--vendi_dtype", type=str, default="float32", choices=["float32", "float16", "bfloat16"])
     args = parser.parse_args()
 
     if GRPOTrainer is None or GRPOConfig is None:
@@ -290,6 +298,66 @@ def main():
         "sum_probs_before": sum(p for _, p in seqs_before) if seqs_before else float("nan"),
         "sum_probs_after": sum(p for _, p in seqs_after) if seqs_after else float("nan"),
     }
+    # Optional Vendi diversity computation (before/after)
+    if args.compute_vendi:
+        vendi_before = None
+        vendi_after = None
+        vendi_sigma_used_before = None
+        vendi_sigma_used_after = None
+        try:
+            from utils.vendi_diversity import vendi_from_sequences  # lazy import
+            vendi_device = args.vendi_device
+            if vendi_device == "auto":
+                vendi_device = "cuda" if (torch.cuda.is_available() and torch.cuda.device_count() > 0) else "cpu"
+            # before
+            seqs_only_b = [a for a, _ in seqs_before]
+            weights_b = [p for _, p in seqs_before]
+            res_b = vendi_from_sequences(
+                seqs_only_b,
+                weights=weights_b,
+                model_name=args.vendi_model,
+                device=vendi_device,
+                dtype=args.vendi_dtype,
+                batch_size=args.vendi_batch_size,
+                kernel=args.vendi_kernel,
+                sigma=args.vendi_sigma,
+            )
+            vendi_before = float(res_b.get("vendi_score", float("nan")))
+            vendi_sigma_used_before = res_b.get("sigma_used")
+            # after
+            seqs_only_a = [a for a, _ in seqs_after]
+            weights_a = [p for _, p in seqs_after]
+            res_a = vendi_from_sequences(
+                seqs_only_a,
+                weights=weights_a,
+                model_name=args.vendi_model,
+                device=vendi_device,
+                dtype=args.vendi_dtype,
+                batch_size=args.vendi_batch_size,
+                kernel=args.vendi_kernel,
+                sigma=args.vendi_sigma,
+            )
+            vendi_after = float(res_a.get("vendi_score", float("nan")))
+            vendi_sigma_used_after = res_a.get("sigma_used")
+            report.update({
+                "diversity_metric_used": "vendi",
+                "before_diversity": vendi_before,
+                "after_diversity": vendi_after,
+                "before_vendi_score": vendi_before,
+                "after_vendi_score": vendi_after,
+                "before_vendi_sigma_used": vendi_sigma_used_before,
+                "after_vendi_sigma_used": vendi_sigma_used_after,
+                "vendi_model": args.vendi_model,
+                "vendi_kernel": args.vendi_kernel,
+                "vendi_dtype": args.vendi_dtype,
+            })
+        except Exception as e:
+            # Best-effort debug log
+            try:
+                with open(os.path.join(args.out_dir, "vendi_debug.log"), "a") as lf:
+                    lf.write(f"EXC {repr(e)}\n")
+            except Exception:
+                pass
     # When esmfold validity is active, summarize pLDDT
     if args.validity_mode == "esmfold":
         import statistics as stats
