@@ -186,7 +186,8 @@ def vendi_from_embeddings(
 
     # Apply weights: M = sqrt(W) K sqrt(W)
     if weights is not None and len(weights) == n:
-        w = torch.tensor(weights, dtype=torch.float64)
+        # Ensure weights live on the same device as embeddings/kernel
+        w = torch.tensor(weights, dtype=torch.float64, device=x.device)
         w = w / (w.sum() + 1e-40)
         Wsqrt = torch.diag(torch.sqrt(torch.clamp(w, min=0.0)))
         M = Wsqrt @ K @ Wsqrt
