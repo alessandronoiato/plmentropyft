@@ -324,6 +324,7 @@ def main():
             )
             vendi_before = float(res_b.get("vendi_score", float("nan")))
             vendi_sigma_used_before = res_b.get("sigma_used")
+            vendi_lambda1_over_trace_before = res_b.get("debug", {}).get("lambda1_over_trace")
             # after
             seqs_only_a = [a for a, _ in seqs_after]
             weights_a = [p for _, p in seqs_after]
@@ -339,6 +340,7 @@ def main():
             )
             vendi_after = float(res_a.get("vendi_score", float("nan")))
             vendi_sigma_used_after = res_a.get("sigma_used")
+            vendi_lambda1_over_trace_after = res_a.get("debug", {}).get("lambda1_over_trace")
             report.update({
                 "diversity_metric_used": "vendi",
                 "before_diversity": vendi_before,
@@ -347,6 +349,8 @@ def main():
                 "after_vendi_score": vendi_after,
                 "before_vendi_sigma_used": vendi_sigma_used_before,
                 "after_vendi_sigma_used": vendi_sigma_used_after,
+                "before_vendi_lambda1_over_trace": vendi_lambda1_over_trace_before,
+                "after_vendi_lambda1_over_trace": vendi_lambda1_over_trace_after,
                 "vendi_model": args.vendi_model,
                 "vendi_kernel": args.vendi_kernel,
                 "vendi_dtype": args.vendi_dtype,

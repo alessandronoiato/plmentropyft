@@ -204,7 +204,11 @@ def vendi_from_embeddings(
             "vendi_score": float("nan"),
             "shannon_entropy_nats": float("nan"),
             "sigma_used": sigma_used if kernel == "rbf" else None,
-            "debug": {"trace": float(trace.item()) if torch.isfinite(trace) else float("nan"), "n": n},
+            "debug": {
+                "trace": float(trace.item()) if torch.isfinite(trace) else float("nan"),
+                "n": n,
+                "lambda1_over_trace": float("nan"),
+            },
         }
     p = eigvals / trace
     # Shannon entropy in nats
@@ -213,11 +217,20 @@ def vendi_from_embeddings(
         p_np = np.clip(p_np, 1e-40, 1.0)
         H = float(-np.sum(p_np * np.log(p_np)))
     vendi = math.exp(H)
+    # Minimal clustering diagnostic: top eigenvalue fraction
+    with torch.no_grad():
+        lambda1_over_trace = float((eigvals.max() / trace).item())
     return {
         "vendi_score": float(vendi),
         "shannon_entropy_nats": float(H),
         "sigma_used": sigma_used if kernel == "rbf" else None,
-        "debug": {"n": n, "d": d, "trace": float(trace.item()), "min_eig": float(eigvals.min().item())},
+        "debug": {
+            "n": n,
+            "d": d,
+            "trace": float(trace.item()),
+            "min_eig": float(eigvals.min().item()),
+            "lambda1_over_trace": lambda1_over_trace,
+        },
     }
 
 
