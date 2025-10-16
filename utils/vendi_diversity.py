@@ -167,6 +167,11 @@ def vendi_from_embeddings(
         x = torch.nn.functional.normalize(x, p=2, dim=-1)
         K = (x @ x.T).clamp(min=-1.0, max=1.0)
         sigma_used = None
+    elif kernel == "linear":
+        # Linear (dot-product) kernel. Recommended to feed L2-normalized embeddings upstream
+        # when using this kernel to avoid unintended norm biases.
+        K = x @ x.T
+        sigma_used = None
     elif kernel == "rbf":
         d2 = _pairwise_squared_distances(x)
         if sigma is None:
@@ -259,7 +264,7 @@ def vendi_from_sequences(
         dtype=dtype,
         batch_size=batch_size,
         layer=None,
-        l2_normalize=(kernel == "cosine"),
+        l2_normalize=(kernel in ("cosine", "linear")),
     )
     return vendi_from_embeddings(embeddings=emb, weights=weights, kernel=kernel, sigma=sigma)
 
