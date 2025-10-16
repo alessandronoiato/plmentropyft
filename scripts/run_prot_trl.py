@@ -152,7 +152,7 @@ def main():
         generation_batch_size=None,
         beta=args.beta,
         sync_ref_model=True,
-        ref_model_sync_steps=20,
+        ref_model_sync_steps=1,
         ref_model_mixup_alpha=1.0,
         remove_unused_columns=False,
         report_to=[],
