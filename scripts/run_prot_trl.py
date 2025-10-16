@@ -74,7 +74,7 @@ def main():
     parser.add_argument("--vendi_model", type=str, default="esm2_t33_650M_UR50D")
     parser.add_argument("--vendi_device", type=str, default="auto", choices=["cpu", "cuda", "auto"])
     parser.add_argument("--vendi_batch_size", type=int, default=16)
-    parser.add_argument("--vendi_kernel", type=str, default="cosine", choices=["cosine", "rbf"])
+    parser.add_argument("--vendi_kernel", type=str, default="cosine", choices=["cosine", "rbf", "linear"])
     parser.add_argument("--vendi_sigma", type=float, default=None)
     parser.add_argument("--vendi_dtype", type=str, default="float32", choices=["float32", "float16", "bfloat16"])
     args = parser.parse_args()
