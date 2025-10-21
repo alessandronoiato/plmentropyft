@@ -33,6 +33,7 @@ from utils.token_utils import get_amino_acid_token_ids
 from utils.protein_sequence_eval import sample_entropy_and_validity
 from utils.protein_validity import is_valid_basic
 from utils.protein_reward import make_self_surprise_reward
+from utils.protein_sequence_distance import topk_distance_avg
 
 
 def get_preferred_device() -> torch.device:
@@ -77,6 +78,12 @@ def main():
     parser.add_argument("--vendi_kernel", type=str, default="cosine", choices=["cosine", "rbf", "linear"])
     parser.add_argument("--vendi_sigma", type=float, default=None)
     parser.add_argument("--vendi_dtype", type=str, default="float32", choices=["float32", "float16", "bfloat16"])
+    # Pairwise top-k%% distance metric (evaluation)
+    parser.add_argument("--pairwise_distance_mode", type=str, default="global", choices=["global", "hamming"], help="Distance mode: global (Needleman–Wunsch) or hamming (ungapped)")
+    parser.add_argument("--pairwise_topk_percent", type=int, default=5, help="Top k percent of largest distances to average")
+    parser.add_argument("--pairwise_num_pairs", type=int, default=5000, help="Number of random pairs to sample for distance computation")
+    parser.add_argument("--pairwise_seed", type=int, default=123, help="Random seed for pair sampling")
+    parser.add_argument("--pairwise_gap_penalty", type=int, default=1, help="Gap penalty for Needleman–Wunsch (global) distance")
     args = parser.parse_args()
 
     if GRPOTrainer is None or GRPOConfig is None:
@@ -298,6 +305,35 @@ def main():
         "sum_probs_before": sum(p for _, p in seqs_before) if seqs_before else float("nan"),
         "sum_probs_after": sum(p for _, p in seqs_after) if seqs_after else float("nan"),
     }
+    # Pairwise top-k% distance metric (before/after)
+    try:
+        seqs_only_b = [a for a, _ in seqs_before]
+        seqs_only_a = [a for a, _ in seqs_after]
+        before_topk_dist = topk_distance_avg(
+            seqs_only_b,
+            mode=args.pairwise_distance_mode,
+            topk_percent=args.pairwise_topk_percent,
+            num_pairs=args.pairwise_num_pairs,
+            seed=args.pairwise_seed,
+            gap_penalty=args.pairwise_gap_penalty,
+        )
+        after_topk_dist = topk_distance_avg(
+            seqs_only_a,
+            mode=args.pairwise_distance_mode,
+            topk_percent=args.pairwise_topk_percent,
+            num_pairs=args.pairwise_num_pairs,
+            seed=args.pairwise_seed,
+            gap_penalty=args.pairwise_gap_penalty,
+        )
+        report.update({
+            "pairwise_distance_mode": args.pairwise_distance_mode,
+            "pairwise_topk_percent": int(args.pairwise_topk_percent),
+            "pairwise_num_pairs": int(args.pairwise_num_pairs),
+            "before_topk_distance_avg": float(before_topk_dist),
+            "after_topk_distance_avg": float(after_topk_dist),
+        })
+    except Exception:
+        pass
     # Optional Vendi diversity computation (before/after)
     if args.compute_vendi:
         vendi_before = None
