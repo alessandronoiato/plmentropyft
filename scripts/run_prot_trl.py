@@ -84,6 +84,8 @@ def main():
     parser.add_argument("--pairwise_num_pairs", type=int, default=5000, help="Number of random pairs to sample for distance computation")
     parser.add_argument("--pairwise_seed", type=int, default=123, help="Random seed for pair sampling")
     parser.add_argument("--pairwise_gap_penalty", type=int, default=1, help="Gap penalty for Needleman–Wunsch (global) distance")
+    parser.add_argument("--pairwise_validity_filter", type=str, default="none", choices=["none", "basic", "esmfold"], help="Validity oracle for distance metric filtering")
+    parser.add_argument("--pairwise_valid_strategy", type=str, default="collect_until", choices=["collect_until", "filter_after"], help="Valid filtering strategy: collect_until (Option 1a) or filter_after (Option 2)")
     args = parser.parse_args()
 
     if GRPOTrainer is None or GRPOConfig is None:
@@ -307,31 +309,149 @@ def main():
     }
     # Pairwise top-k% distance metric (before/after)
     try:
-        seqs_only_b = [a for a, _ in seqs_before]
-        seqs_only_a = [a for a, _ in seqs_after]
-        before_topk_dist = topk_distance_avg(
-            seqs_only_b,
-            mode=args.pairwise_distance_mode,
-            topk_percent=args.pairwise_topk_percent,
-            num_pairs=args.pairwise_num_pairs,
-            seed=args.pairwise_seed,
-            gap_penalty=args.pairwise_gap_penalty,
-        )
-        after_topk_dist = topk_distance_avg(
-            seqs_only_a,
-            mode=args.pairwise_distance_mode,
-            topk_percent=args.pairwise_topk_percent,
-            num_pairs=args.pairwise_num_pairs,
-            seed=args.pairwise_seed,
-            gap_penalty=args.pairwise_gap_penalty,
-        )
+        from math import ceil, sqrt
+
+        def _compute_topk_for_sequences(seq_list):
+            return topk_distance_avg(
+                seq_list,
+                mode=args.pairwise_distance_mode,
+                topk_percent=args.pairwise_topk_percent,
+                num_pairs=args.pairwise_num_pairs,
+                seed=args.pairwise_seed,
+                gap_penalty=args.pairwise_gap_penalty,
+            )
+
+        # Extract sequences as generated
+        seqs_only_b_all = [a for a, _ in seqs_before]
+        seqs_only_a_all = [a for a, _ in seqs_after]
+
+        # Helper to filter valid sequences from a batch of per_valid records
+        def _filter_valid_from_records(records):
+            out = []
+            for rec in records:
+                try:
+                    if int(rec.get("valid", 0)) == 1 and isinstance(rec.get("sequence"), str) and len(rec.get("sequence")) > 0:
+                        out.append(rec.get("sequence"))
+                except Exception:
+                    continue
+            return out
+
+        # Validity filtering strategies
+        valid_filter = str(args.pairwise_validity_filter)
+        valid_strategy = str(args.pairwise_valid_strategy)
+
+        before_valid_count = None
+        after_valid_count = None
+        before_feasible = None
+        after_feasible = None
+
+        seqs_only_b = list(seqs_only_b_all)
+        seqs_only_a = list(seqs_only_a_all)
+
+        if valid_filter != "none":
+            # Determine required number of valid sequences for target pairs
+            n_valid_min = int(ceil((1.0 + sqrt(1.0 + 8.0 * float(args.pairwise_num_pairs))) / 2.0))
+
+            if valid_strategy == "filter_after":
+                # Use per_valid from initial eval to filter
+                # Re-run sampling to collect per_valid for before and after using the same settings
+                def _collect_valid_sequences(model):
+                    fold_device = args.fold_device
+                    if fold_device == "auto":
+                        fold_device = "cuda" if (torch.cuda.is_available() and torch.cuda.device_count() > 0) else "cpu"
+                    _, _, seqs, _, per_valid, _, _ = sample_entropy_and_validity(
+                        model,
+                        tok,
+                        args.horizon,
+                        max(args.eval_samples, args.batch_size),
+                        do_sample=args.eval_do_sample,
+                        top_p=args.eval_top_p,
+                        top_k=args.eval_top_k,
+                        temperature=args.eval_temperature,
+                        validity_mode=args.validity_mode if valid_filter == "esmfold" else "basic",
+                        fold_device=fold_device,
+                        fold_batch_size=args.fold_batch_size,
+                        fold_plddt_threshold=args.fold_plddt_threshold,
+                        eval_samples_fold_max=args.eval_samples_fold_max,
+                        fold_cache_dir=args.fold_cache_dir,
+                    )
+                    return _filter_valid_from_records(per_valid)
+
+                model_b = trainer.accelerator.unwrap_model(trainer.model)
+                seqs_only_b = _collect_valid_sequences(model_b)
+                model_a = trainer.accelerator.unwrap_model(trainer.model)
+                seqs_only_a = _collect_valid_sequences(model_a)
+                before_valid_count = len(seqs_only_b)
+                after_valid_count = len(seqs_only_a)
+                before_feasible = before_valid_count >= n_valid_min
+                after_feasible = after_valid_count >= n_valid_min
+            else:
+                # collect_until: accumulate valid sequences across rounds until n_valid_min
+                def _accumulate_valid_sequences(model):
+                    fold_device = args.fold_device
+                    if fold_device == "auto":
+                        fold_device = "cuda" if (torch.cuda.is_available() and torch.cuda.device_count() > 0) else "cpu"
+                    acc = []
+                    seen = set()
+                    max_rounds = 10
+                    rounds = 0
+                    while len(acc) < n_valid_min and rounds < max_rounds:
+                        _, _, seqs, _, per_valid, _, _ = sample_entropy_and_validity(
+                            model,
+                            tok,
+                            args.horizon,
+                            max(args.eval_samples, args.batch_size),
+                            do_sample=args.eval_do_sample,
+                            top_p=args.eval_top_p,
+                            top_k=args.eval_top_k,
+                            temperature=args.eval_temperature,
+                            validity_mode=args.validity_mode if valid_filter == "esmfold" else "basic",
+                            fold_device=fold_device,
+                            fold_batch_size=args.fold_batch_size,
+                            fold_plddt_threshold=args.fold_plddt_threshold,
+                            eval_samples_fold_max=args.eval_samples_fold_max,
+                            fold_cache_dir=args.fold_cache_dir,
+                        )
+                        valids = _filter_valid_from_records(per_valid)
+                        for s in valids:
+                            if s not in seen:
+                                seen.add(s)
+                                acc.append(s)
+                            if len(acc) >= n_valid_min:
+                                break
+                        rounds += 1
+                    return acc
+
+                model_b = trainer.accelerator.unwrap_model(trainer.model)
+                seqs_only_b = _accumulate_valid_sequences(model_b)
+                model_a = trainer.accelerator.unwrap_model(trainer.model)
+                seqs_only_a = _accumulate_valid_sequences(model_a)
+                before_valid_count = len(seqs_only_b)
+                after_valid_count = len(seqs_only_a)
+                before_feasible = before_valid_count >= n_valid_min
+                after_feasible = after_valid_count >= n_valid_min
+
+        before_topk_dist = _compute_topk_for_sequences(seqs_only_b)
+        after_topk_dist = _compute_topk_for_sequences(seqs_only_a)
+
         report.update({
             "pairwise_distance_mode": args.pairwise_distance_mode,
             "pairwise_topk_percent": int(args.pairwise_topk_percent),
             "pairwise_num_pairs": int(args.pairwise_num_pairs),
+            "pairwise_validity_filter": args.pairwise_validity_filter,
+            "pairwise_valid_strategy": args.pairwise_valid_strategy,
             "before_topk_distance_avg": float(before_topk_dist),
             "after_topk_distance_avg": float(after_topk_dist),
         })
+        if valid_filter != "none":
+            report.update({
+                "before_valid_pairs_target": int(args.pairwise_num_pairs),
+                "after_valid_pairs_target": int(args.pairwise_num_pairs),
+                "before_valid_count": int(before_valid_count or 0),
+                "after_valid_count": int(after_valid_count or 0),
+                "before_valid_pairs_feasible": bool(before_feasible),
+                "after_valid_pairs_feasible": bool(after_feasible),
+            })
     except Exception:
         pass
     # Optional Vendi diversity computation (before/after)
