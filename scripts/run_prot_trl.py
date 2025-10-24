@@ -137,6 +137,13 @@ def main():
     policy.save_pretrained(model_path)
     tok.save_pretrained(model_path)
 
+    # Keep a frozen handle to the initial (pre-training) policy for "before" evaluations
+    before_model_for_eval = AutoModelForCausalLM.from_pretrained(
+        model_path, cache_dir=args.cache_dir, local_files_only=local_only
+    )
+    before_model_for_eval.requires_grad_(False)
+    before_model_for_eval.eval()
+
     # Sanity check removed: no legality constraints in generation
 
     # Build GRPO config
@@ -377,10 +384,8 @@ def main():
                     )
                     return _filter_valid_from_records(per_valid)
 
-                model_b = trainer.accelerator.unwrap_model(trainer.model)
-                seqs_only_b = _collect_valid_sequences(model_b)
-                model_a = trainer.accelerator.unwrap_model(trainer.model)
-                seqs_only_a = _collect_valid_sequences(model_a)
+                seqs_only_b = _collect_valid_sequences(before_model_for_eval)
+                seqs_only_a = _collect_valid_sequences(trainer.accelerator.unwrap_model(trainer.model))
                 before_valid_count = len(seqs_only_b)
                 after_valid_count = len(seqs_only_a)
                 before_feasible = before_valid_count >= n_valid_min
@@ -422,10 +427,8 @@ def main():
                         rounds += 1
                     return acc
 
-                model_b = trainer.accelerator.unwrap_model(trainer.model)
-                seqs_only_b = _accumulate_valid_sequences(model_b)
-                model_a = trainer.accelerator.unwrap_model(trainer.model)
-                seqs_only_a = _accumulate_valid_sequences(model_a)
+                seqs_only_b = _accumulate_valid_sequences(before_model_for_eval)
+                seqs_only_a = _accumulate_valid_sequences(trainer.accelerator.unwrap_model(trainer.model))
                 before_valid_count = len(seqs_only_b)
                 after_valid_count = len(seqs_only_a)
                 before_feasible = before_valid_count >= n_valid_min
