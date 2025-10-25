@@ -86,6 +86,7 @@ def main():
     parser.add_argument("--pairwise_gap_penalty", type=int, default=1, help="Gap penalty for Needleman–Wunsch (global) distance")
     parser.add_argument("--pairwise_validity_filter", type=str, default="none", choices=["none", "basic", "esmfold"], help="Validity oracle for distance metric filtering")
     parser.add_argument("--pairwise_valid_strategy", type=str, default="collect_until", choices=["collect_until", "filter_after"], help="Valid filtering strategy: collect_until (Option 1a) or filter_after (Option 2)")
+    parser.add_argument("--pairwise_collect_max_rounds", type=int, default=10, help="Max rounds of sampling when using collect_until")
     args = parser.parse_args()
 
     if GRPOTrainer is None or GRPOConfig is None:
@@ -398,7 +399,7 @@ def main():
                         fold_device = "cuda" if (torch.cuda.is_available() and torch.cuda.device_count() > 0) else "cpu"
                     acc = []
                     seen = set()
-                    max_rounds = 10
+                    max_rounds = int(getattr(args, "pairwise_collect_max_rounds", 10))
                     rounds = 0
                     while len(acc) < n_valid_min and rounds < max_rounds:
                         _, _, seqs, _, per_valid, _, _ = sample_entropy_and_validity(
@@ -454,6 +455,7 @@ def main():
                 "after_valid_count": int(after_valid_count or 0),
                 "before_valid_pairs_feasible": bool(before_feasible),
                 "after_valid_pairs_feasible": bool(after_feasible),
+                "pairwise_collect_max_rounds": int(getattr(args, "pairwise_collect_max_rounds", 10)),
             })
     except Exception:
         pass
