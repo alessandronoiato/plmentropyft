@@ -87,6 +87,7 @@ def main():
     parser.add_argument("--pairwise_validity_filter", type=str, default="none", choices=["none", "basic", "esmfold"], help="Validity oracle for distance metric filtering")
     parser.add_argument("--pairwise_valid_strategy", type=str, default="collect_until", choices=["collect_until", "filter_after"], help="Valid filtering strategy: collect_until (Option 1a) or filter_after (Option 2)")
     parser.add_argument("--pairwise_collect_max_rounds", type=int, default=10, help="Max rounds of sampling when using collect_until")
+    parser.add_argument("--pairwise_eval_budget", type=int, default=None, help="If set, filter_after generates/folds exactly this many sequences per side")
     args = parser.parse_args()
 
     if GRPOTrainer is None or GRPOConfig is None:
@@ -367,11 +368,14 @@ def main():
                     fold_device = args.fold_device
                     if fold_device == "auto":
                         fold_device = "cuda" if (torch.cuda.is_available() and torch.cuda.device_count() > 0) else "cpu"
+                    budget = int(getattr(args, "pairwise_eval_budget", 0) or 0)
+                    gen_count = budget if budget and budget > 0 else max(args.eval_samples, args.batch_size)
+                    fold_cap = budget if (valid_filter == "esmfold" and budget and budget > 0) else args.eval_samples_fold_max
                     _, _, seqs, _, per_valid, _, _ = sample_entropy_and_validity(
                         model,
                         tok,
                         args.horizon,
-                        max(args.eval_samples, args.batch_size),
+                        gen_count,
                         do_sample=args.eval_do_sample,
                         top_p=args.eval_top_p,
                         top_k=args.eval_top_k,
@@ -380,7 +384,7 @@ def main():
                         fold_device=fold_device,
                         fold_batch_size=args.fold_batch_size,
                         fold_plddt_threshold=args.fold_plddt_threshold,
-                        eval_samples_fold_max=args.eval_samples_fold_max,
+                        eval_samples_fold_max=fold_cap,
                         fold_cache_dir=args.fold_cache_dir,
                     )
                     return _filter_valid_from_records(per_valid)
@@ -435,8 +439,29 @@ def main():
                 before_feasible = before_valid_count >= n_valid_min
                 after_feasible = after_valid_count >= n_valid_min
 
-        before_topk_dist = _compute_topk_for_sequences(seqs_only_b)
-        after_topk_dist = _compute_topk_for_sequences(seqs_only_a)
+        # Cap pairs to unique available per side to avoid replacement when filter_after budget is used
+        def _unique_pairs_cap(nv: int) -> int:
+            return int(max(0, nv * (nv - 1) // 2))
+
+        pairs_used_before = int(args.pairwise_num_pairs)
+        pairs_used_after = int(args.pairwise_num_pairs)
+
+        if valid_filter != "none" and valid_strategy == "filter_after":
+            pairs_used_before = min(pairs_used_before, _unique_pairs_cap(len(seqs_only_b)))
+            pairs_used_after = min(pairs_used_after, _unique_pairs_cap(len(seqs_only_a)))
+
+        def _compute_topk_for_sequences_with_pairs(seq_list, num_pairs_override: int):
+            return topk_distance_avg(
+                seq_list,
+                mode=args.pairwise_distance_mode,
+                topk_percent=args.pairwise_topk_percent,
+                num_pairs=num_pairs_override,
+                seed=args.pairwise_seed,
+                gap_penalty=args.pairwise_gap_penalty,
+            )
+
+        before_topk_dist = _compute_topk_for_sequences_with_pairs(seqs_only_b, pairs_used_before)
+        after_topk_dist = _compute_topk_for_sequences_with_pairs(seqs_only_a, pairs_used_after)
 
         report.update({
             "pairwise_distance_mode": args.pairwise_distance_mode,
@@ -456,6 +481,9 @@ def main():
                 "before_valid_pairs_feasible": bool(before_feasible),
                 "after_valid_pairs_feasible": bool(after_feasible),
                 "pairwise_collect_max_rounds": int(getattr(args, "pairwise_collect_max_rounds", 10)),
+                "pairwise_eval_budget": int(getattr(args, "pairwise_eval_budget", 0) or 0),
+                "before_pairs_used": int(pairs_used_before),
+                "after_pairs_used": int(pairs_used_after),
             })
     except Exception:
         pass
