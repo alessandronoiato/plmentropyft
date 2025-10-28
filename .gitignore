@@ -63,3 +63,6 @@ fold_cache/
 fold_outputs/
 
 
+# --- Docs/notes not tracked ---
+mode_discovery.md
+
