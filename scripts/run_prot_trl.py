@@ -88,6 +88,7 @@ def main():
     parser.add_argument("--pairwise_valid_strategy", type=str, default="collect_until", choices=["collect_until", "filter_after"], help="Valid filtering strategy: collect_until (Option 1a) or filter_after (Option 2)")
     parser.add_argument("--pairwise_collect_max_rounds", type=int, default=10, help="Max rounds of sampling when using collect_until")
     parser.add_argument("--pairwise_eval_budget", type=int, default=None, help="If set, filter_after generates/folds exactly this many sequences per side")
+    parser.add_argument("--pairwise_eval_chunk_size", type=int, default=None, help="Optional chunk size for filter_after when pairwise_eval_budget is set")
     args = parser.parse_args()
 
     if GRPOTrainer is None or GRPOConfig is None:
@@ -369,25 +370,53 @@ def main():
                     if fold_device == "auto":
                         fold_device = "cuda" if (torch.cuda.is_available() and torch.cuda.device_count() > 0) else "cpu"
                     budget = int(getattr(args, "pairwise_eval_budget", 0) or 0)
-                    gen_count = budget if budget and budget > 0 else max(args.eval_samples, args.batch_size)
-                    fold_cap = budget if (valid_filter == "esmfold" and budget and budget > 0) else args.eval_samples_fold_max
-                    _, _, seqs, _, per_valid, _, _ = sample_entropy_and_validity(
-                        model,
-                        tok,
-                        args.horizon,
-                        gen_count,
-                        do_sample=args.eval_do_sample,
-                        top_p=args.eval_top_p,
-                        top_k=args.eval_top_k,
-                        temperature=args.eval_temperature,
-                        validity_mode=args.validity_mode if valid_filter == "esmfold" else "basic",
-                        fold_device=fold_device,
-                        fold_batch_size=args.fold_batch_size,
-                        fold_plddt_threshold=args.fold_plddt_threshold,
-                        eval_samples_fold_max=fold_cap,
-                        fold_cache_dir=args.fold_cache_dir,
-                    )
-                    return _filter_valid_from_records(per_valid)
+                    if budget and budget > 0:
+                        chunk_size = int(getattr(args, "pairwise_eval_chunk_size", 0) or 0)
+                        if chunk_size <= 0:
+                            chunk_size = min(int(args.eval_samples), budget)
+                        remaining = budget
+                        valids_acc = []
+                        while remaining > 0:
+                            this_chunk = min(chunk_size, remaining)
+                            _, _, seqs, _, per_valid, _, _ = sample_entropy_and_validity(
+                                model,
+                                tok,
+                                args.horizon,
+                                this_chunk,
+                                do_sample=args.eval_do_sample,
+                                top_p=args.eval_top_p,
+                                top_k=args.eval_top_k,
+                                temperature=args.eval_temperature,
+                                validity_mode=args.validity_mode if valid_filter == "esmfold" else "basic",
+                                fold_device=fold_device,
+                                fold_batch_size=args.fold_batch_size,
+                                fold_plddt_threshold=args.fold_plddt_threshold,
+                                eval_samples_fold_max=(this_chunk if valid_filter == "esmfold" else args.eval_samples_fold_max),
+                                fold_cache_dir=args.fold_cache_dir,
+                            )
+                            valids_acc.extend(_filter_valid_from_records(per_valid))
+                            remaining -= this_chunk
+                        return valids_acc
+                    else:
+                        gen_count = max(args.eval_samples, args.batch_size)
+                        fold_cap = args.eval_samples_fold_max
+                        _, _, seqs, _, per_valid, _, _ = sample_entropy_and_validity(
+                            model,
+                            tok,
+                            args.horizon,
+                            gen_count,
+                            do_sample=args.eval_do_sample,
+                            top_p=args.eval_top_p,
+                            top_k=args.eval_top_k,
+                            temperature=args.eval_temperature,
+                            validity_mode=args.validity_mode if valid_filter == "esmfold" else "basic",
+                            fold_device=fold_device,
+                            fold_batch_size=args.fold_batch_size,
+                            fold_plddt_threshold=args.fold_plddt_threshold,
+                            eval_samples_fold_max=fold_cap,
+                            fold_cache_dir=args.fold_cache_dir,
+                        )
+                        return _filter_valid_from_records(per_valid)
 
                 seqs_only_b = _collect_valid_sequences(before_model_for_eval)
                 seqs_only_a = _collect_valid_sequences(trainer.accelerator.unwrap_model(trainer.model))
