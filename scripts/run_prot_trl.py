@@ -4,6 +4,8 @@ import sys
 import json
 import math
 import csv
+import random
+import numpy as np
 from typing import List, Tuple
 
 import torch
@@ -95,6 +97,13 @@ def main():
         raise RuntimeError("trl[grpo] is required. Install a version that provides GRPOTrainer and GRPOConfig.")
 
     torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        try:
+            torch.cuda.manual_seed_all(args.seed)
+        except Exception:
+            pass
+    random.seed(args.seed)
+    np.random.seed(args.seed)
     os.makedirs(args.out_dir, exist_ok=True)
 
     # Prefer NVIDIA GPU if available, otherwise CPU
@@ -230,6 +239,15 @@ def main():
     # No exact entropy callback: we use Monte Carlo estimates only
 
     # BEFORE distribution (initial policy)
+    def _reseed_all(seed: int) -> None:
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            try:
+                torch.cuda.manual_seed_all(seed)
+            except Exception:
+                pass
+        random.seed(seed)
+        np.random.seed(seed)
     def dump_sequence_probs(model, csv_path, validity_csv_path):
         # Monte Carlo estimate of distribution and entropy without legality constraints
         # Determine fold device
@@ -278,6 +296,8 @@ def main():
                     w.writerow([rec.get("sequence", ""), int(rec.get("valid", 0))])
         return H, H_valid, seqs, mean_valid, mean_token_len, mean_residue_len
 
+    # Reseed to ensure matched RNG start for the BEFORE sampling pass
+    _reseed_all(args.seed)
     model_before = trainer.accelerator.unwrap_model(trainer.model)
     before_csv = os.path.join(args.out_dir, "before_sequence_probs.csv")
     before_valid_csv = os.path.join(args.out_dir, "before_validity.csv")
@@ -292,6 +312,8 @@ def main():
 
     # After: Monte Carlo estimate on the fine-tuned policy
     with torch.no_grad():
+        # Reseed to ensure matched RNG start for the AFTER sampling pass
+        _reseed_all(args.seed)
         model_eval = trainer.accelerator.unwrap_model(trainer.model)
         after_csv = os.path.join(args.out_dir, "after_sequence_probs.csv")
         after_valid_csv = os.path.join(args.out_dir, "after_validity.csv")
