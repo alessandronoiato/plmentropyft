@@ -36,6 +36,7 @@ from utils.protein_sequence_eval import sample_entropy_and_validity
 from utils.protein_validity import is_valid_basic
 from utils.protein_reward import make_self_surprise_reward
 from utils.protein_sequence_distance import topk_distance_avg
+from utils.wandb_logger import maybe_init_wandb, log_report, finish as wandb_finish
 
 
 def get_preferred_device() -> torch.device:
@@ -91,6 +92,14 @@ def main():
     parser.add_argument("--pairwise_collect_max_rounds", type=int, default=10, help="Max rounds of sampling when using collect_until")
     parser.add_argument("--pairwise_eval_budget", type=int, default=None, help="If set, filter_after generates/folds exactly this many sequences per side")
     parser.add_argument("--pairwise_eval_chunk_size", type=int, default=None, help="Optional chunk size for filter_after when pairwise_eval_budget is set")
+    # Optional Weights & Biases logging
+    parser.add_argument("--wandb_project", type=str, default=None)
+    parser.add_argument("--wandb_run_name", type=str, default=None)
+    parser.add_argument("--wandb_mode", type=str, default="online", choices=["online", "offline"])
+    parser.add_argument("--wandb_group", type=str, default=None)
+    parser.add_argument("--wandb_tags", type=str, default=None, help="Comma-separated tags")
+    parser.add_argument("--no_json_report", action="store_true", help="Skip writing grpo_exact_entropy.json if set")
+    parser.add_argument("--wandb_api_key", type=str, default=None, help="Optional WandB API key for programmatic login on compute nodes")
     args = parser.parse_args()
 
     if GRPOTrainer is None or GRPOConfig is None:
@@ -239,6 +248,27 @@ def main():
     # No exact entropy callback: we use Monte Carlo estimates only
 
     # BEFORE distribution (initial policy)
+    # Optional WandB init
+    wandb_run = None
+    try:
+        wandb_config = {
+            "model_id": args.model_id,
+            "horizon": args.horizon,
+            "steps": args.steps,
+            "batch_size": args.batch_size,
+            "num_generations": args.num_generations,
+            "beta": args.beta,
+            "first_variation_coef": args.first_variation_coef,
+            "validity_mode": args.validity_mode,
+            "pairwise_distance_mode": args.pairwise_distance_mode,
+            "pairwise_topk_percent": args.pairwise_topk_percent,
+            "pairwise_num_pairs": args.pairwise_num_pairs,
+            "pairwise_validity_filter": args.pairwise_validity_filter,
+            "pairwise_valid_strategy": args.pairwise_valid_strategy,
+        }
+        wandb_run = maybe_init_wandb(args, wandb_config)
+    except Exception:
+        wandb_run = None
     def _reseed_all(seed: int) -> None:
         torch.manual_seed(seed)
         if torch.cuda.is_available():
@@ -636,9 +666,21 @@ def main():
             "before_mean_plddt": _mean_plddt_from_records(before_recs),
             "after_mean_plddt": _mean_plddt_from_records(after_recs),
         })
-    with open(os.path.join(args.out_dir, "grpo_exact_entropy.json"), "w") as f:
-        json.dump(report, f, indent=2)
+    # Log to WandB if enabled
+    try:
+        log_report(wandb_run, report)
+    except Exception:
+        pass
+
+    # Write JSON unless disabled
+    if not args.no_json_report:
+        with open(os.path.join(args.out_dir, "grpo_exact_entropy.json"), "w") as f:
+            json.dump(report, f, indent=2)
     # 'after_sequence_probs.csv' already written by dump_sequence_probs
+    try:
+        wandb_finish(wandb_run)
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":
