@@ -250,6 +250,7 @@ def main():
             "steps": args.steps,
             "batch_size": args.batch_size,
             "num_generations": args.num_generations,
+            "seed": args.seed,
             "beta": args.beta,
             "first_variation_coef": args.first_variation_coef,
             "validity_mode": args.validity_mode,
