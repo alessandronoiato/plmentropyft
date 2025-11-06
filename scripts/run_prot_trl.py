@@ -411,7 +411,7 @@ def main():
             if valid_strategy == "filter_after":
                 # Use per_valid from initial eval to filter
                 # Re-run sampling to collect per_valid for before and after using the same settings
-                def _collect_valid_sequences(model):
+                def _collect_valid_sequences(model, label: str = ""):
                     fold_device = args.fold_device
                     if fold_device == "auto":
                         fold_device = "cuda" if (torch.cuda.is_available() and torch.cuda.device_count() > 0) else "cpu"
@@ -422,6 +422,7 @@ def main():
                             chunk_size = min(int(args.eval_samples), budget)
                         remaining = budget
                         valids_acc = []
+                        folded = 0
                         while remaining > 0:
                             this_chunk = min(chunk_size, remaining)
                             _, _, seqs, _, per_valid, _, _ = sample_entropy_and_validity(
@@ -442,6 +443,19 @@ def main():
                             )
                             valids_acc.extend(_filter_valid_from_records(per_valid))
                             remaining -= this_chunk
+                            folded += this_chunk
+                            # Aggregated folding progress across chunks (stdout)
+                            if valid_filter == "esmfold":
+                                try:
+                                    label_str = f" {label}" if isinstance(label, str) and label else ""
+                                    print(f"\rFolding{label_str}: {folded} / {budget}", end="", flush=True)
+                                except Exception:
+                                    pass
+                        if valid_filter == "esmfold":
+                            try:
+                                print("")
+                            except Exception:
+                                pass
                         return valids_acc
                     else:
                         gen_count = max(args.eval_samples, args.batch_size)
@@ -464,8 +478,8 @@ def main():
                         )
                         return _filter_valid_from_records(per_valid)
 
-                seqs_only_b = _collect_valid_sequences(before_model_for_eval)
-                seqs_only_a = _collect_valid_sequences(trainer.accelerator.unwrap_model(trainer.model))
+                seqs_only_b = _collect_valid_sequences(before_model_for_eval, label="before")
+                seqs_only_a = _collect_valid_sequences(trainer.accelerator.unwrap_model(trainer.model), label="after")
                 before_valid_count = len(seqs_only_b)
                 after_valid_count = len(seqs_only_a)
                 before_feasible = before_valid_count >= n_valid_min
@@ -560,8 +574,8 @@ def main():
                 "before_pairs_used": int(pairs_used_before),
                 "after_pairs_used": int(pairs_used_after),
             })
-    except Exception:
-        pass
+            except Exception:
+                pass
     # (Removed) Vendi diversity computation
     # When esmfold validity is active, summarize pLDDT
     if args.validity_mode == "esmfold":
@@ -605,8 +619,8 @@ def main():
 
     # Write JSON unless disabled
     if not args.no_json_report:
-        with open(os.path.join(args.out_dir, "grpo_exact_entropy.json"), "w") as f:
-            json.dump(report, f, indent=2)
+    with open(os.path.join(args.out_dir, "grpo_exact_entropy.json"), "w") as f:
+        json.dump(report, f, indent=2)
     # 'after_sequence_probs.csv' already written by dump_sequence_probs
     try:
         wandb_finish(wandb_run)
