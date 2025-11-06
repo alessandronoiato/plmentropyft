@@ -1,4 +1,5 @@
 import hashlib
+import os
 import json
 import os
 from typing import Any, Dict, List, Optional, Tuple
@@ -104,6 +105,11 @@ def fold_plddt_stats(
     model = load_esmfold(device=device, dtype=dtype)
 
     results: List[Dict[str, Any]] = []
+    # Minimal progress display (one-line, optional via env var)
+    # Enabled by default; set PLM_FOLD_PROGRESS=0 to disable
+    _show_progress = os.getenv("PLM_FOLD_PROGRESS", "1") != "0"
+    _total = len(seqs)
+    _done = 0
     i = 0
     while i < len(seqs):
         chunk = seqs[i : i + max(1, batch_size)]
@@ -156,6 +162,12 @@ def fold_plddt_stats(
                     "error": "timeout",
                 }
             results.append(rec)
+            _done += 1
+            if _show_progress:
+                try:
+                    print(f"\rFolding progress: {_done} / {_total}", end="", flush=True)
+                except Exception:
+                    pass
 
             # Persist to cache
             if cache_path is not None:
