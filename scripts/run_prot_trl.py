@@ -574,8 +574,8 @@ def main():
                 "before_pairs_used": int(pairs_used_before),
                 "after_pairs_used": int(pairs_used_after),
             })
-            except Exception:
-                pass
+    except Exception:
+        pass
     # (Removed) Vendi diversity computation
     # When esmfold validity is active, summarize pLDDT
     if args.validity_mode == "esmfold":
@@ -619,8 +619,8 @@ def main():
 
     # Write JSON unless disabled
     if not args.no_json_report:
-    with open(os.path.join(args.out_dir, "grpo_exact_entropy.json"), "w") as f:
-        json.dump(report, f, indent=2)
+        with open(os.path.join(args.out_dir, "grpo_exact_entropy.json"), "w") as f:
+            json.dump(report, f, indent=2)
     # 'after_sequence_probs.csv' already written by dump_sequence_probs
     try:
         wandb_finish(wandb_run)
