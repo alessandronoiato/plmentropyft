@@ -198,3 +198,81 @@ def topk_distance_avg(
     return float(sum(topk) / len(topk))
 
 
+def quantile_hausdorff_distance(
+    pre: List[str],
+    post: List[str],
+    *,
+    mode: str = "global",
+    quantile: float = 0.98,
+    sample_per_dir: int | None = None,
+    seed: int | None = None,
+    gap_penalty: int = 1,
+) -> Tuple[float, float, float]:
+    """Quantile Hausdorff distances between PRE and POST sets.
+
+    Returns (pre_to_post_q, post_to_pre_q, symmetric_q=max(...)).
+    - Distance = 1 - identity, using the selected mode ("global" or "hamming").
+    - If sample_per_dir is provided, sample that many elements from each set for
+      the directed computation; otherwise use all elements.
+    - Returns (nan, nan, nan) if either set is empty.
+    """
+    A = [s for s in pre if isinstance(s, str) and len(s) > 0]
+    B = [s for s in post if isinstance(s, str) and len(s) > 0]
+    if len(A) == 0 or len(B) == 0:
+        return float("nan"), float("nan"), float("nan")
+
+    # Deduplicate while preserving order
+    def _dedup(xs: List[str]) -> List[str]:
+        seen = set()
+        out: List[str] = []
+        for s in xs:
+            if s not in seen:
+                seen.add(s)
+                out.append(s)
+        return out
+
+    A = _dedup(A)
+    B = _dedup(B)
+
+    rng = random.Random(seed or 0)
+    if sample_per_dir is not None and sample_per_dir > 0:
+        if len(A) > sample_per_dir:
+            A_idx = sorted(rng.sample(range(len(A)), sample_per_dir))
+            A = [A[i] for i in A_idx]
+        if len(B) > sample_per_dir:
+            B_idx = sorted(rng.sample(range(len(B)), sample_per_dir))
+            B = [B[i] for i in B_idx]
+
+    # Directed minima arrays
+    mins_A = [1.0] * len(A)  # for each a in A, min_b d(a,b)
+    mins_B = [1.0] * len(B)  # for each b in B, min_a d(a,b)
+
+    # Compute pairwise and update both directions
+    for i, sa in enumerate(A):
+        for j, sb in enumerate(B):
+            if mode == "hamming":
+                ident = sequence_identity_hamming(sa, sb)
+            else:
+                ident = sequence_identity_global(sa, sb, gap_penalty=gap_penalty)
+            d = max(0.0, min(1.0, 1.0 - ident))
+            if d < mins_A[i]:
+                mins_A[i] = d
+            if d < mins_B[j]:
+                mins_B[j] = d
+
+    def _quantile(xs: List[float], q: float) -> float:
+        xs2 = [x for x in xs if math.isfinite(x)]
+        if len(xs2) == 0:
+            return float("nan")
+        xs2.sort()
+        q = min(1.0, max(0.0, q))
+        # Inclusive definition: ceil(q * n) - 1
+        idx = max(0, min(len(xs2) - 1, int(math.ceil(q * len(xs2)) - 1)))
+        return float(xs2[idx])
+
+    pre_to_post_q = _quantile(mins_A, quantile)
+    post_to_pre_q = _quantile(mins_B, quantile)
+    symmetric_q = max(pre_to_post_q, post_to_pre_q)
+    return pre_to_post_q, post_to_pre_q, symmetric_q
+
+

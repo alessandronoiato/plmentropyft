@@ -36,6 +36,7 @@ from utils.protein_sequence_eval import sample_entropy_and_validity
 from utils.protein_validity import is_valid_basic
 from utils.protein_reward import make_self_surprise_reward
 from utils.protein_sequence_distance import topk_distance_avg
+from utils.protein_sequence_distance import quantile_hausdorff_distance
 from utils.wandb_logger import maybe_init_wandb, log_report, finish as wandb_finish
 
 
@@ -75,7 +76,7 @@ def main():
     parser.add_argument("--eval_samples_fold_max", type=int, default=None)
     parser.add_argument("--fold_dtype", type=str, default="float32", choices=["float32", "float16"], help="ESMFold compute dtype for folding; float16 can speed up on CUDA. Use the same setting for BEFORE and AFTER.")
     # (Removed) Vendi diversity
-    # Pairwise top-k%% distance metric (evaluation)
+    # Pairwise top-k% distance metric (evaluation)
     parser.add_argument("--pairwise_distance_mode", type=str, default="global", choices=["global", "hamming"], help="Distance mode: global (Needleman–Wunsch) or hamming (ungapped)")
     parser.add_argument("--pairwise_topk_percent", type=int, default=5, help="Top k percent of largest distances to average")
     parser.add_argument("--pairwise_num_pairs", type=int, default=5000, help="Number of random pairs to sample for distance computation")
@@ -86,6 +87,10 @@ def main():
     parser.add_argument("--pairwise_collect_max_rounds", type=int, default=10, help="Max rounds of sampling when using collect_until")
     parser.add_argument("--pairwise_eval_budget", type=int, default=None, help="If set, filter_after generates/folds exactly this many sequences per side")
     parser.add_argument("--pairwise_eval_chunk_size", type=int, default=None, help="Optional chunk size for filter_after when pairwise_eval_budget is set")
+    # Quantile Hausdorff (set-level)
+    parser.add_argument("--compute_hausdorff", action="store_true", help="Compute quantile Hausdorff distance between BEFORE and AFTER valid sets")
+    parser.add_argument("--hausdorff_quantile", type=float, default=0.98, help="Quantile in (0,1] for robust Hausdorff")
+    parser.add_argument("--hausdorff_sample_per_dir", type=int, default=None, help="Optional subsample size per direction; exact if unset")
     # Optional Weights & Biases logging
     parser.add_argument("--wandb_project", type=str, default=None)
     parser.add_argument("--wandb_run_name", type=str, default=None)
@@ -580,6 +585,37 @@ def main():
                 "pairwise_eval_budget": int(getattr(args, "pairwise_eval_budget", 0) or 0),
                 "before_pairs_used": int(pairs_used_before),
                 "after_pairs_used": int(pairs_used_after),
+            })
+
+        # Quantile Hausdorff (optional)
+        if bool(getattr(args, "compute_hausdorff", False)):
+            # Deduplicate sets for stability
+            def _dedup(xs: List[str]) -> List[str]:
+                seen = set()
+                out: List[str] = []
+                for s in xs:
+                    if s not in seen:
+                        seen.add(s)
+                        out.append(s)
+                return out
+
+            A = _dedup(seqs_only_b)
+            B = _dedup(seqs_only_a)
+            pre_to_post_q, post_to_pre_q, sym_q = quantile_hausdorff_distance(
+                A,
+                B,
+                mode=args.pairwise_distance_mode,
+                quantile=float(args.hausdorff_quantile),
+                sample_per_dir=None if args.hausdorff_sample_per_dir in (None, 0) else int(args.hausdorff_sample_per_dir),
+                seed=int(args.pairwise_seed),
+                gap_penalty=int(args.pairwise_gap_penalty),
+            )
+            report.update({
+                "hausdorff_quantile": float(args.hausdorff_quantile),
+                "hausdorff_sample_per_dir": int(args.hausdorff_sample_per_dir) if args.hausdorff_sample_per_dir is not None else 0,
+                "hausdorff_pre_to_post_q": float(pre_to_post_q),
+                "hausdorff_post_to_pre_q": float(post_to_pre_q),
+                "hausdorff_symmetric_q": float(sym_q),
             })
     except Exception:
         pass
