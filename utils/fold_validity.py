@@ -5,8 +5,7 @@ import os
 from typing import Any, Dict, List, Optional, Tuple
 
 
-_ESM_MODEL_SINGLETON = None
-_ESM_MODEL_DEVICE = None
+_ESM_MODEL_CACHE: Dict[Tuple[str, str], Any] = {}
 
 
 def _sha1(text: str) -> str:
@@ -20,7 +19,7 @@ def load_esmfold(device: str = "cpu", dtype: str = "float32"):
     - device: "cpu" | "cuda"
     - dtype: "float32" | "float16"
     """
-    global _ESM_MODEL_SINGLETON, _ESM_MODEL_DEVICE
+    global _ESM_MODEL_CACHE
     try:
         import torch  # noqa: F401
         from esm.pretrained import esmfold_v1
@@ -29,8 +28,9 @@ def load_esmfold(device: str = "cpu", dtype: str = "float32"):
             "ESMFold is not available. Please install 'esm' (pip install fair-esm) to use esmfold validity."
         ) from exc
 
-    if _ESM_MODEL_SINGLETON is not None and _ESM_MODEL_DEVICE == device:
-        return _ESM_MODEL_SINGLETON
+    key = (device, dtype)
+    if key in _ESM_MODEL_CACHE:
+        return _ESM_MODEL_CACHE[key]
 
     model = esmfold_v1()
     model = model.eval()
@@ -42,8 +42,7 @@ def load_esmfold(device: str = "cpu", dtype: str = "float32"):
             model = model.half()
         except Exception:
             pass
-    _ESM_MODEL_SINGLETON = model
-    _ESM_MODEL_DEVICE = device
+    _ESM_MODEL_CACHE[key] = model
     return model
 
 
@@ -145,13 +144,40 @@ def fold_plddt_stats(
                     "error": None,
                 }
             except Exception as exc:  # pragma: no cover - robustness
-                rec = {
-                    "ok": False,
-                    "mean_plddt": None,
-                    "median_plddt": None,
-                    "length": len(s),
-                    "error": f"{type(exc).__name__}: {exc}",
-                }
+                # If fp16 on CUDA fails, retry in float32 as a safe fallback for this sequence
+                rec = None
+                if dtype == "float16" and device == "cuda":
+                    try:
+                        model32 = load_esmfold(device=device, dtype="float32")
+                        pdb_str = model32.infer_pdb(s)
+                        plddt = _parse_plddt_from_pdb(pdb_str)
+                        if len(plddt) == 0:
+                            raise RuntimeError("empty pLDDT from PDB")
+                        mean_val = float(sum(plddt) / len(plddt))
+                        median_val = float(stats.median(plddt))
+                        rec = {
+                            "ok": True,
+                            "mean_plddt": mean_val,
+                            "median_plddt": median_val,
+                            "length": len(s),
+                            "error": None,
+                        }
+                    except Exception as exc2:
+                        rec = {
+                            "ok": False,
+                            "mean_plddt": None,
+                            "median_plddt": None,
+                            "length": len(s),
+                            "error": f"{type(exc2).__name__}: {exc2}",
+                        }
+                if rec is None:
+                    rec = {
+                        "ok": False,
+                        "mean_plddt": None,
+                        "median_plddt": None,
+                        "length": len(s),
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
             # Timeout handling
             if timeout_s is not None and (time.time() - start) > timeout_s:
                 rec = {

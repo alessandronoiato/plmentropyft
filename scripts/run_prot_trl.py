@@ -73,6 +73,7 @@ def main():
     parser.add_argument("--fold_batch_size", type=int, default=1)
     parser.add_argument("--fold_cache_dir", type=str, default=None)
     parser.add_argument("--eval_samples_fold_max", type=int, default=None)
+    parser.add_argument("--fold_dtype", type=str, default="float32", choices=["float32", "float16"], help="ESMFold compute dtype for folding; float16 can speed up on CUDA. Use the same setting for BEFORE and AFTER.")
     # (Removed) Vendi diversity
     # Pairwise top-k%% distance metric (evaluation)
     parser.add_argument("--pairwise_distance_mode", type=str, default="global", choices=["global", "hamming"], help="Distance mode: global (Needleman–Wunsch) or hamming (ungapped)")
@@ -254,6 +255,7 @@ def main():
             "beta": args.beta,
             "first_variation_coef": args.first_variation_coef,
             "validity_mode": args.validity_mode,
+            "fold_dtype": args.fold_dtype,
             "pairwise_distance_mode": args.pairwise_distance_mode,
             "pairwise_topk_percent": args.pairwise_topk_percent,
             "pairwise_num_pairs": args.pairwise_num_pairs,
@@ -293,6 +295,7 @@ def main():
             fold_plddt_threshold=args.fold_plddt_threshold,
             eval_samples_fold_max=args.eval_samples_fold_max,
             fold_cache_dir=args.fold_cache_dir,
+            fold_dtype=args.fold_dtype,
         )
         os.makedirs(os.path.dirname(csv_path), exist_ok=True)
         with open(csv_path, "w", newline="") as f:
@@ -347,6 +350,7 @@ def main():
         "horizon": args.horizon,
         "num_sequences_before": len(seqs_before),
         "num_sequences_after": len(seqs_after),
+        "fold_dtype": args.fold_dtype,
         "before_entropy_nats": float(H_before),
         "after_entropy_nats": float(H_after),
         "before_entropy_nats_valid_only": float(H_before_valid),
@@ -440,6 +444,7 @@ def main():
                                 fold_plddt_threshold=args.fold_plddt_threshold,
                                 eval_samples_fold_max=(this_chunk if valid_filter == "esmfold" else args.eval_samples_fold_max),
                                 fold_cache_dir=args.fold_cache_dir,
+                                fold_dtype=args.fold_dtype,
                             )
                             valids_acc.extend(_filter_valid_from_records(per_valid))
                             remaining -= this_chunk
@@ -475,6 +480,7 @@ def main():
                             fold_plddt_threshold=args.fold_plddt_threshold,
                             eval_samples_fold_max=fold_cap,
                             fold_cache_dir=args.fold_cache_dir,
+                            fold_dtype=args.fold_dtype,
                         )
                         return _filter_valid_from_records(per_valid)
 
@@ -510,6 +516,7 @@ def main():
                             fold_plddt_threshold=args.fold_plddt_threshold,
                             eval_samples_fold_max=args.eval_samples_fold_max,
                             fold_cache_dir=args.fold_cache_dir,
+                            fold_dtype=args.fold_dtype,
                         )
                         valids = _filter_valid_from_records(per_valid)
                         for s in valids:

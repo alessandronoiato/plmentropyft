@@ -174,6 +174,7 @@ def sample_entropy_and_validity(
     fold_plddt_threshold: float = 70.0,
     eval_samples_fold_max: Optional[int] = None,
     fold_cache_dir: Optional[str] = None,
+    fold_dtype: str = "float32",
 ) -> Tuple[float, float, List[Tuple[str, float]], float, List[Dict[str, Any]], float, float]:
     model_dev = next(model.parameters()).device
     start_id = tokenizer.bos_token_id if tokenizer.bos_token_id is not None else tokenizer.eos_token_id
@@ -302,7 +303,7 @@ def sample_entropy_and_validity(
         stats_list = fold_plddt_stats(
             seqs_for_fold,
             device=fold_device,
-            dtype="float32",
+            dtype=fold_dtype,
             batch_size=max(1, fold_batch_size),
             cache_dir=fold_cache_dir,
             timeout_s=None,
