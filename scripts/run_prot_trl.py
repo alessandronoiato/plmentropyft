@@ -599,8 +599,42 @@ def main():
                         out.append(s)
                 return out
 
+            # Prefer reusing the already generated BEFORE/AFTER sequences written during dump_sequence_probs.
+            # If the requested validity filter matches the run's validity_mode, we can filter those sets
+            # directly from the CSVs instead of re-sampling, ensuring Hausdorff compares the same draws.
             A = _dedup(seqs_only_b)
             B = _dedup(seqs_only_a)
+            try:
+                if valid_filter != "none" and valid_filter == str(args.validity_mode):
+                    before_valid_csv_path = os.path.join(args.out_dir, "before_validity.csv")
+                    after_valid_csv_path = os.path.join(args.out_dir, "after_validity.csv")
+                    def _load_valid_from_csv(path: str) -> List[str]:
+                        out: List[str] = []
+                        with open(path, "r") as f:
+                            rr = csv.reader(f)
+                            header = next(rr, None)
+                            # Basic mode: ["sequence","valid"]
+                            # ESMFold mode: ["sequence","valid","plddt_mean","plddt_median","fold_ok","fold_error"]
+                            for row in rr:
+                                if not row:
+                                    continue
+                                try:
+                                    seq = row[0]
+                                    v = int(row[1])
+                                    if v == 1 and isinstance(seq, str) and len(seq) > 0:
+                                        out.append(seq)
+                                except Exception:
+                                    continue
+                        return out
+                    A_csv = _load_valid_from_csv(before_valid_csv_path)
+                    B_csv = _load_valid_from_csv(after_valid_csv_path)
+                    if len(A_csv) > 0 and len(B_csv) > 0:
+                        A = _dedup(A_csv)
+                        B = _dedup(B_csv)
+            except Exception:
+                # Fallback silently to the in-memory sets if CSV parsing fails
+                pass
+
             pre_to_post_q, post_to_pre_q, sym_q = quantile_hausdorff_distance(
                 A,
                 B,
