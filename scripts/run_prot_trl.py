@@ -35,8 +35,8 @@ from utils.token_utils import get_amino_acid_token_ids
 from utils.protein_sequence_eval import sample_entropy_and_validity
 from utils.protein_validity import is_valid_basic
 from utils.protein_reward import make_self_surprise_reward
-from utils.protein_sequence_distance import topk_distance_avg
 from utils.protein_sequence_distance import quantile_hausdorff_distance
+from utils.vendi_diversity import vendi_from_sequences
 from utils.wandb_logger import maybe_init_wandb, log_report, finish as wandb_finish
 
 
@@ -76,21 +76,23 @@ def main():
     parser.add_argument("--eval_samples_fold_max", type=int, default=None)
     parser.add_argument("--fold_dtype", type=str, default="float32", choices=["float32", "float16"], help="ESMFold compute dtype for folding; float16 can speed up on CUDA. Use the same setting for BEFORE and AFTER.")
     # (Removed) Vendi diversity
-    # Pairwise top-k% distance metric (evaluation)
+    # Distance settings (used by Hausdorff)
     parser.add_argument("--pairwise_distance_mode", type=str, default="global", choices=["global", "hamming"], help="Distance mode: global (Needleman–Wunsch) or hamming (ungapped)")
-    parser.add_argument("--pairwise_topk_percent", type=int, default=5, help="Top k percent of largest distances to average")
-    parser.add_argument("--pairwise_num_pairs", type=int, default=5000, help="Number of random pairs to sample for distance computation")
     parser.add_argument("--pairwise_seed", type=int, default=123, help="Random seed for pair sampling")
     parser.add_argument("--pairwise_gap_penalty", type=int, default=1, help="Gap penalty for Needleman–Wunsch (global) distance")
-    parser.add_argument("--pairwise_validity_filter", type=str, default="none", choices=["none", "basic", "esmfold"], help="Validity oracle for distance metric filtering")
-    parser.add_argument("--pairwise_valid_strategy", type=str, default="collect_until", choices=["collect_until", "filter_after"], help="Valid filtering strategy: collect_until (Option 1a) or filter_after (Option 2)")
-    parser.add_argument("--pairwise_collect_max_rounds", type=int, default=10, help="Max rounds of sampling when using collect_until")
-    parser.add_argument("--pairwise_eval_budget", type=int, default=None, help="If set, filter_after generates/folds exactly this many sequences per side")
-    parser.add_argument("--pairwise_eval_chunk_size", type=int, default=None, help="Optional chunk size for filter_after when pairwise_eval_budget is set")
     # Quantile Hausdorff (set-level)
     parser.add_argument("--compute_hausdorff", action="store_true", help="Compute quantile Hausdorff distance between BEFORE and AFTER valid sets")
     parser.add_argument("--hausdorff_quantile", type=float, default=0.98, help="Quantile in (0,1] for robust Hausdorff")
     parser.add_argument("--hausdorff_sample_per_dir", type=int, default=None, help="Optional subsample size per direction; exact if unset")
+    # Vendi diversity (evaluation-only)
+    # Note: for offline runs, pre-download ESM2 weights into TORCH_HOME/XDG_CACHE_HOME so vendi evaluation can run without internet.
+    parser.add_argument("--compute_vendi", action="store_true", help="Compute Vendi diversity before and after fine-tuning")
+    parser.add_argument("--vendi_kernel", type=str, default="cosine", choices=["cosine", "linear", "rbf"], help="Kernel for Vendi")
+    parser.add_argument("--vendi_model", type=str, default="esm2_t33_650M_UR50D", help="ESM2 model name for embeddings")
+    parser.add_argument("--vendi_dtype", type=str, default="float32", choices=["float32", "float16"], help="ESM2 compute dtype for embeddings")
+    parser.add_argument("--vendi_batch_size", type=int, default=16, help="Batch size for ESM2 embedding during Vendi")
+    parser.add_argument("--vendi_sigma", type=float, default=None, help="RBF sigma for Vendi kernel; if None uses median heuristic")
+    parser.add_argument("--vendi_max_sequences", type=int, default=None, help="Optional cap on unique sequences passed to Vendi (weighted subsample)")
     # Optional Weights & Biases logging
     parser.add_argument("--wandb_project", type=str, default=None)
     parser.add_argument("--wandb_run_name", type=str, default=None)
@@ -262,10 +264,13 @@ def main():
             "validity_mode": args.validity_mode,
             "fold_dtype": args.fold_dtype,
             "pairwise_distance_mode": args.pairwise_distance_mode,
-            "pairwise_topk_percent": args.pairwise_topk_percent,
-            "pairwise_num_pairs": args.pairwise_num_pairs,
-            "pairwise_validity_filter": args.pairwise_validity_filter,
-            "pairwise_valid_strategy": args.pairwise_valid_strategy,
+            "compute_vendi": bool(getattr(args, "compute_vendi", False)),
+            "vendi_kernel": args.vendi_kernel,
+            "vendi_model": args.vendi_model,
+            "vendi_dtype": args.vendi_dtype,
+            "vendi_batch_size": int(getattr(args, "vendi_batch_size", 16)),
+            "vendi_sigma": None if args.vendi_sigma is None else float(args.vendi_sigma),
+            "vendi_max_sequences": 0 if args.vendi_max_sequences is None else int(args.vendi_max_sequences),
         }
         wandb_run = maybe_init_wandb(args, wandb_config)
     except Exception:
@@ -337,7 +342,7 @@ def main():
 
     # Save exact entropy before finetuning if available
     with open(os.path.join(args.out_dir, "before_exact_entropy.json"), "w") as f:
-        json.dump({"entropy_nats": float(H_before), "mean_validity": float(V_before), "num_sequences": len(seqs_before)}, f, indent=2)
+        json.dump({"entropy_nats": float(H_before), "mean_validity": float(V_before)}, f, indent=2)
 
     # Train
     trainer.train()
@@ -353,8 +358,6 @@ def main():
 
     report = {
         "horizon": args.horizon,
-        "num_sequences_before": len(seqs_before),
-        "num_sequences_after": len(seqs_after),
         "fold_dtype": args.fold_dtype,
         "before_entropy_nats": float(H_before),
         "after_entropy_nats": float(H_after),
@@ -372,223 +375,76 @@ def main():
         "sum_probs_before": sum(p for _, p in seqs_before) if seqs_before else float("nan"),
         "sum_probs_after": sum(p for _, p in seqs_after) if seqs_after else float("nan"),
     }
-    # Pairwise top-k% distance metric (before/after)
+    # Vendi diversity (optional, evaluation-only)
     try:
-        from math import ceil, sqrt
-
-        def _compute_topk_for_sequences(seq_list):
-            return topk_distance_avg(
-                seq_list,
-                mode=args.pairwise_distance_mode,
-                topk_percent=args.pairwise_topk_percent,
-                num_pairs=args.pairwise_num_pairs,
-                seed=args.pairwise_seed,
-                gap_penalty=args.pairwise_gap_penalty,
+        if bool(getattr(args, "compute_vendi", False)):
+            # Internal device selection (no CLI): prefer CUDA if available
+            vendi_device = "cuda" if (torch.cuda.is_available() and torch.cuda.device_count() > 0) else "cpu"
+            # Weighted sequences and optional weighted subsample
+            def _extract_sequences_and_weights(seqs: List[Tuple[str, float]]) -> Tuple[List[str], List[float]]:
+                s_list = [a for a, _ in seqs]
+                w_list = [float(p) for _, p in seqs]
+                return s_list, w_list
+            def _weighted_subsample(s_list: List[str], w_list: List[float], max_n: int) -> Tuple[List[str], List[float]]:
+                if max_n is None or max_n <= 0 or max_n >= len(s_list):
+                    return s_list, w_list
+                import numpy as _np
+                w = _np.array(w_list, dtype=_np.float64)
+                w = w / (w.sum() + 1e-40)
+                idx = _np.random.choice(len(s_list), size=max_n, replace=False, p=w)
+                idx = sorted(set(int(i) for i in idx))
+                s_sel = [s_list[i] for i in idx]
+                w_sel = [w_list[i] for i in idx]
+                return s_sel, w_sel
+            # BEFORE
+            seqs_b, weights_b = _extract_sequences_and_weights(seqs_before)
+            if args.vendi_max_sequences is not None:
+                seqs_b, weights_b = _weighted_subsample(seqs_b, weights_b, int(args.vendi_max_sequences))
+            vendi_b = vendi_from_sequences(
+                seqs_b,
+                weights=weights_b,
+                model_name=str(args.vendi_model),
+                device=vendi_device,
+                dtype=str(args.vendi_dtype),
+                batch_size=int(args.vendi_batch_size),
+                kernel=str(args.vendi_kernel),
+                sigma=None if args.vendi_sigma is None else float(args.vendi_sigma),
             )
-
-        # Extract sequences as generated
-        seqs_only_b_all = [a for a, _ in seqs_before]
-        seqs_only_a_all = [a for a, _ in seqs_after]
-
-        # Helper to filter valid sequences from a batch of per_valid records
-        def _filter_valid_from_records(records):
-            out = []
-            for rec in records:
-                try:
-                    if int(rec.get("valid", 0)) == 1 and isinstance(rec.get("sequence"), str) and len(rec.get("sequence")) > 0:
-                        out.append(rec.get("sequence"))
-                except Exception:
-                    continue
-            return out
-
-        # Validity filtering strategies
-        valid_filter = str(args.pairwise_validity_filter)
-        valid_strategy = str(args.pairwise_valid_strategy)
-
-        before_valid_count = None
-        after_valid_count = None
-        before_feasible = None
-        after_feasible = None
-
-        seqs_only_b = list(seqs_only_b_all)
-        seqs_only_a = list(seqs_only_a_all)
-
-        if valid_filter != "none":
-            # Determine required number of valid sequences for target pairs
-            n_valid_min = int(ceil((1.0 + sqrt(1.0 + 8.0 * float(args.pairwise_num_pairs))) / 2.0))
-
-            if valid_strategy == "filter_after":
-                # Use per_valid from initial eval to filter
-                # Re-run sampling to collect per_valid for before and after using the same settings
-                def _collect_valid_sequences(model, label: str = ""):
-                    fold_device = args.fold_device
-                    if fold_device == "auto":
-                        fold_device = "cuda" if (torch.cuda.is_available() and torch.cuda.device_count() > 0) else "cpu"
-                    budget = int(getattr(args, "pairwise_eval_budget", 0) or 0)
-                    if budget and budget > 0:
-                        chunk_size = int(getattr(args, "pairwise_eval_chunk_size", 0) or 0)
-                        if chunk_size <= 0:
-                            chunk_size = min(int(args.eval_samples), budget)
-                        remaining = budget
-                        valids_acc = []
-                        folded = 0
-                        while remaining > 0:
-                            this_chunk = min(chunk_size, remaining)
-                            _, _, seqs, _, per_valid, _, _ = sample_entropy_and_validity(
-                                model,
-                                tok,
-                                args.horizon,
-                                this_chunk,
-                                do_sample=args.eval_do_sample,
-                                top_p=args.eval_top_p,
-                                top_k=args.eval_top_k,
-                                temperature=args.eval_temperature,
-                                validity_mode=args.validity_mode if valid_filter == "esmfold" else "basic",
-                                fold_device=fold_device,
-                                fold_batch_size=args.fold_batch_size,
-                                fold_plddt_threshold=args.fold_plddt_threshold,
-                                eval_samples_fold_max=(this_chunk if valid_filter == "esmfold" else args.eval_samples_fold_max),
-                                fold_cache_dir=args.fold_cache_dir,
-                                fold_dtype=args.fold_dtype,
-                            )
-                            valids_acc.extend(_filter_valid_from_records(per_valid))
-                            remaining -= this_chunk
-                            folded += this_chunk
-                            # Aggregated folding progress across chunks (stdout)
-                            if valid_filter == "esmfold":
-                                try:
-                                    label_str = f" {label}" if isinstance(label, str) and label else ""
-                                    print(f"\rFolding{label_str}: {folded} / {budget}", end="", flush=True)
-                                except Exception:
-                                    pass
-                        if valid_filter == "esmfold":
-                            try:
-                                print("")
-                            except Exception:
-                                pass
-                        return valids_acc
-                    else:
-                        gen_count = max(args.eval_samples, args.batch_size)
-                        fold_cap = args.eval_samples_fold_max
-                        _, _, seqs, _, per_valid, _, _ = sample_entropy_and_validity(
-                            model,
-                            tok,
-                            args.horizon,
-                            gen_count,
-                            do_sample=args.eval_do_sample,
-                            top_p=args.eval_top_p,
-                            top_k=args.eval_top_k,
-                            temperature=args.eval_temperature,
-                            validity_mode=args.validity_mode if valid_filter == "esmfold" else "basic",
-                            fold_device=fold_device,
-                            fold_batch_size=args.fold_batch_size,
-                            fold_plddt_threshold=args.fold_plddt_threshold,
-                            eval_samples_fold_max=fold_cap,
-                            fold_cache_dir=args.fold_cache_dir,
-                            fold_dtype=args.fold_dtype,
-                        )
-                        return _filter_valid_from_records(per_valid)
-
-                seqs_only_b = _collect_valid_sequences(before_model_for_eval, label="before")
-                seqs_only_a = _collect_valid_sequences(trainer.accelerator.unwrap_model(trainer.model), label="after")
-                before_valid_count = len(seqs_only_b)
-                after_valid_count = len(seqs_only_a)
-                before_feasible = before_valid_count >= n_valid_min
-                after_feasible = after_valid_count >= n_valid_min
-            else:
-                # collect_until: accumulate valid sequences across rounds until n_valid_min
-                def _accumulate_valid_sequences(model):
-                    fold_device = args.fold_device
-                    if fold_device == "auto":
-                        fold_device = "cuda" if (torch.cuda.is_available() and torch.cuda.device_count() > 0) else "cpu"
-                    acc = []
-                    seen = set()
-                    max_rounds = int(getattr(args, "pairwise_collect_max_rounds", 10))
-                    rounds = 0
-                    while len(acc) < n_valid_min and rounds < max_rounds:
-                        _, _, seqs, _, per_valid, _, _ = sample_entropy_and_validity(
-                            model,
-                            tok,
-                            args.horizon,
-                            max(args.eval_samples, args.batch_size),
-                            do_sample=args.eval_do_sample,
-                            top_p=args.eval_top_p,
-                            top_k=args.eval_top_k,
-                            temperature=args.eval_temperature,
-                            validity_mode=args.validity_mode if valid_filter == "esmfold" else "basic",
-                            fold_device=fold_device,
-                            fold_batch_size=args.fold_batch_size,
-                            fold_plddt_threshold=args.fold_plddt_threshold,
-                            eval_samples_fold_max=args.eval_samples_fold_max,
-                            fold_cache_dir=args.fold_cache_dir,
-                            fold_dtype=args.fold_dtype,
-                        )
-                        valids = _filter_valid_from_records(per_valid)
-                        for s in valids:
-                            if s not in seen:
-                                seen.add(s)
-                                acc.append(s)
-                            if len(acc) >= n_valid_min:
-                                break
-                        rounds += 1
-                    return acc
-
-                seqs_only_b = _accumulate_valid_sequences(before_model_for_eval)
-                seqs_only_a = _accumulate_valid_sequences(trainer.accelerator.unwrap_model(trainer.model))
-                before_valid_count = len(seqs_only_b)
-                after_valid_count = len(seqs_only_a)
-                before_feasible = before_valid_count >= n_valid_min
-                after_feasible = after_valid_count >= n_valid_min
-
-        # Cap pairs to unique available per side to avoid replacement when filter_after budget is used
-        def _unique_pairs_cap(nv: int) -> int:
-            return int(max(0, nv * (nv - 1) // 2))
-
-        pairs_used_before = int(args.pairwise_num_pairs)
-        pairs_used_after = int(args.pairwise_num_pairs)
-
-        if valid_filter != "none" and valid_strategy == "filter_after":
-            pairs_used_before = min(pairs_used_before, _unique_pairs_cap(len(seqs_only_b)))
-            pairs_used_after = min(pairs_used_after, _unique_pairs_cap(len(seqs_only_a)))
-
-        def _compute_topk_for_sequences_with_pairs(seq_list, num_pairs_override: int):
-            return topk_distance_avg(
-                seq_list,
-                mode=args.pairwise_distance_mode,
-                topk_percent=args.pairwise_topk_percent,
-                num_pairs=num_pairs_override,
-                seed=args.pairwise_seed,
-                gap_penalty=args.pairwise_gap_penalty,
+            # AFTER
+            seqs_a, weights_a = _extract_sequences_and_weights(seqs_after)
+            if args.vendi_max_sequences is not None:
+                seqs_a, weights_a = _weighted_subsample(seqs_a, weights_a, int(args.vendi_max_sequences))
+            vendi_a = vendi_from_sequences(
+                seqs_a,
+                weights=weights_a,
+                model_name=str(args.vendi_model),
+                device=vendi_device,
+                dtype=str(args.vendi_dtype),
+                batch_size=int(args.vendi_batch_size),
+                kernel=str(args.vendi_kernel),
+                sigma=None if args.vendi_sigma is None else float(args.vendi_sigma),
             )
-
-        before_topk_dist = _compute_topk_for_sequences_with_pairs(seqs_only_b, pairs_used_before)
-        after_topk_dist = _compute_topk_for_sequences_with_pairs(seqs_only_a, pairs_used_after)
-
-        report.update({
-            "pairwise_distance_mode": args.pairwise_distance_mode,
-            "pairwise_topk_percent": int(args.pairwise_topk_percent),
-            "pairwise_num_pairs": int(args.pairwise_num_pairs),
-            "pairwise_validity_filter": args.pairwise_validity_filter,
-            "pairwise_valid_strategy": args.pairwise_valid_strategy,
-            "before_topk_distance_avg": float(before_topk_dist),
-            "after_topk_distance_avg": float(after_topk_dist),
-        })
-        if valid_filter != "none":
+            # Update report with Vendi metrics and context
             report.update({
-                "before_valid_pairs_target": int(args.pairwise_num_pairs),
-                "after_valid_pairs_target": int(args.pairwise_num_pairs),
-                "before_valid_count": int(before_valid_count or 0),
-                "after_valid_count": int(after_valid_count or 0),
-                "before_valid_pairs_feasible": bool(before_feasible),
-                "after_valid_pairs_feasible": bool(after_feasible),
-                "pairwise_collect_max_rounds": int(getattr(args, "pairwise_collect_max_rounds", 10)),
-                "pairwise_eval_budget": int(getattr(args, "pairwise_eval_budget", 0) or 0),
-                "before_pairs_used": int(pairs_used_before),
-                "after_pairs_used": int(pairs_used_after),
+                "before_vendi_score": float(vendi_b.get("vendi_score", float("nan"))),
+                "after_vendi_score": float(vendi_a.get("vendi_score", float("nan"))),
+                "vendi_kernel": str(args.vendi_kernel),
+                "vendi_model": str(args.vendi_model),
+                "vendi_dtype": str(args.vendi_dtype),
+                "before_vendi_sigma_used": vendi_b.get("sigma_used"),
+                "after_vendi_sigma_used": vendi_a.get("sigma_used"),
+                "before_vendi_lambda1_over_trace": vendi_b.get("debug", {}).get("lambda1_over_trace"),
+                "after_vendi_lambda1_over_trace": vendi_a.get("debug", {}).get("lambda1_over_trace"),
             })
-
-        # Quantile Hausdorff (optional)
+    except Exception:
+        # Keep run alive if ESM2 is unavailable offline or any embedding error occurs
+        pass
+    # Quantile Hausdorff (optional)
+    try:
         if bool(getattr(args, "compute_hausdorff", False)):
+            # Extract sequences as generated
+            seqs_only_b_all = [a for a, _ in seqs_before]
+            seqs_only_a_all = [a for a, _ in seqs_after]
             # Deduplicate sets for stability
             def _dedup(xs: List[str]) -> List[str]:
                 seen = set()
@@ -598,14 +454,11 @@ def main():
                         seen.add(s)
                         out.append(s)
                 return out
-
-            # Prefer reusing the already generated BEFORE/AFTER sequences written during dump_sequence_probs.
-            # If the requested validity filter matches the run's validity_mode, we can filter those sets
-            # directly from the CSVs instead of re-sampling, ensuring Hausdorff compares the same draws.
-            A = _dedup(seqs_only_b)
-            B = _dedup(seqs_only_a)
-            try:
-                if valid_filter != "none" and valid_filter == str(args.validity_mode):
+            A = _dedup(seqs_only_b_all)
+            B = _dedup(seqs_only_a_all)
+            # If ESMFold validity was used, prefer computing Hausdorff over valid sequences from CSVs
+            if str(args.validity_mode) == "esmfold":
+                try:
                     before_valid_csv_path = os.path.join(args.out_dir, "before_validity.csv")
                     after_valid_csv_path = os.path.join(args.out_dir, "after_validity.csv")
                     def _load_valid_from_csv(path: str) -> List[str]:
@@ -613,8 +466,6 @@ def main():
                         with open(path, "r") as f:
                             rr = csv.reader(f)
                             header = next(rr, None)
-                            # Basic mode: ["sequence","valid"]
-                            # ESMFold mode: ["sequence","valid","plddt_mean","plddt_median","fold_ok","fold_error"]
                             for row in rr:
                                 if not row:
                                     continue
@@ -631,10 +482,9 @@ def main():
                     if len(A_csv) > 0 and len(B_csv) > 0:
                         A = _dedup(A_csv)
                         B = _dedup(B_csv)
-            except Exception:
-                # Fallback silently to the in-memory sets if CSV parsing fails
-                pass
-
+                except Exception:
+                    # Fallback silently to the in-memory sets if CSV parsing fails
+                    pass
             pre_to_post_q, post_to_pre_q, sym_q = quantile_hausdorff_distance(
                 A,
                 B,
