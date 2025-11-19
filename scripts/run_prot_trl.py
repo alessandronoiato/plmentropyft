@@ -93,6 +93,7 @@ def main():
     parser.add_argument("--vendi_batch_size", type=int, default=16, help="Batch size for ESM2 embedding during Vendi")
     parser.add_argument("--vendi_sigma", type=float, default=None, help="RBF sigma for Vendi kernel; if None uses median heuristic")
     parser.add_argument("--vendi_max_sequences", type=int, default=None, help="Optional cap on unique sequences passed to Vendi (weighted subsample)")
+    parser.add_argument("--vendi_weighting", type=str, default="prob", choices=["prob", "uniform"], help="Weighting scheme for Vendi: prob=MC probabilities; uniform=equal weights")
     # Optional Weights & Biases logging
     parser.add_argument("--wandb_project", type=str, default=None)
     parser.add_argument("--wandb_run_name", type=str, default=None)
@@ -271,6 +272,7 @@ def main():
             "vendi_batch_size": int(getattr(args, "vendi_batch_size", 16)),
             "vendi_sigma": None if args.vendi_sigma is None else float(args.vendi_sigma),
             "vendi_max_sequences": 0 if args.vendi_max_sequences is None else int(args.vendi_max_sequences),
+            "vendi_weighting": str(getattr(args, "vendi_weighting", "prob")),
         }
         wandb_run = maybe_init_wandb(args, wandb_config)
     except Exception:
@@ -396,34 +398,70 @@ def main():
                 s_sel = [s_list[i] for i in idx]
                 w_sel = [w_list[i] for i in idx]
                 return s_sel, w_sel
+            def _uniform_subsample(s_list: List[str], max_n: int) -> List[str]:
+                if max_n is None or max_n <= 0 or max_n >= len(s_list):
+                    return s_list
+                import numpy as _np
+                idx = _np.random.choice(len(s_list), size=max_n, replace=False)
+                idx = sorted(set(int(i) for i in idx))
+                return [s_list[i] for i in idx]
             # BEFORE
             seqs_b, weights_b = _extract_sequences_and_weights(seqs_before)
-            if args.vendi_max_sequences is not None:
-                seqs_b, weights_b = _weighted_subsample(seqs_b, weights_b, int(args.vendi_max_sequences))
-            vendi_b = vendi_from_sequences(
-                seqs_b,
-                weights=weights_b,
-                model_name=str(args.vendi_model),
-                device=vendi_device,
-                dtype=str(args.vendi_dtype),
-                batch_size=int(args.vendi_batch_size),
-                kernel=str(args.vendi_kernel),
-                sigma=None if args.vendi_sigma is None else float(args.vendi_sigma),
-            )
+            if args.vendi_weighting == "prob":
+                if args.vendi_max_sequences is not None:
+                    seqs_b, weights_b = _weighted_subsample(seqs_b, weights_b, int(args.vendi_max_sequences))
+                vendi_b = vendi_from_sequences(
+                    seqs_b,
+                    weights=weights_b,
+                    model_name=str(args.vendi_model),
+                    device=vendi_device,
+                    dtype=str(args.vendi_dtype),
+                    batch_size=int(args.vendi_batch_size),
+                    kernel=str(args.vendi_kernel),
+                    sigma=None if args.vendi_sigma is None else float(args.vendi_sigma),
+                )
+            else:
+                # uniform weighting/subsampling: ignore MC probabilities
+                if args.vendi_max_sequences is not None:
+                    seqs_b = _uniform_subsample(seqs_b, int(args.vendi_max_sequences))
+                vendi_b = vendi_from_sequences(
+                    seqs_b,
+                    weights=None,
+                    model_name=str(args.vendi_model),
+                    device=vendi_device,
+                    dtype=str(args.vendi_dtype),
+                    batch_size=int(args.vendi_batch_size),
+                    kernel=str(args.vendi_kernel),
+                    sigma=None if args.vendi_sigma is None else float(args.vendi_sigma),
+                )
             # AFTER
             seqs_a, weights_a = _extract_sequences_and_weights(seqs_after)
-            if args.vendi_max_sequences is not None:
-                seqs_a, weights_a = _weighted_subsample(seqs_a, weights_a, int(args.vendi_max_sequences))
-            vendi_a = vendi_from_sequences(
-                seqs_a,
-                weights=weights_a,
-                model_name=str(args.vendi_model),
-                device=vendi_device,
-                dtype=str(args.vendi_dtype),
-                batch_size=int(args.vendi_batch_size),
-                kernel=str(args.vendi_kernel),
-                sigma=None if args.vendi_sigma is None else float(args.vendi_sigma),
-            )
+            if args.vendi_weighting == "prob":
+                if args.vendi_max_sequences is not None:
+                    seqs_a, weights_a = _weighted_subsample(seqs_a, weights_a, int(args.vendi_max_sequences))
+                vendi_a = vendi_from_sequences(
+                    seqs_a,
+                    weights=weights_a,
+                    model_name=str(args.vendi_model),
+                    device=vendi_device,
+                    dtype=str(args.vendi_dtype),
+                    batch_size=int(args.vendi_batch_size),
+                    kernel=str(args.vendi_kernel),
+                    sigma=None if args.vendi_sigma is None else float(args.vendi_sigma),
+                )
+            else:
+                if args.vendi_max_sequences is not None:
+                    seqs_a = _uniform_subsample(seqs_a, int(args.vendi_max_sequences))
+                vendi_a = vendi_from_sequences(
+                    seqs_a,
+                    weights=None,
+                    model_name=str(args.vendi_model),
+                    device=vendi_device,
+                    dtype=str(args.vendi_dtype),
+                    batch_size=int(args.vendi_batch_size),
+                    kernel=str(args.vendi_kernel),
+                    sigma=None if args.vendi_sigma is None else float(args.vendi_sigma),
+                )
             # Update report with Vendi metrics and context
             report.update({
                 "before_vendi_score": float(vendi_b.get("vendi_score", float("nan"))),
@@ -431,6 +469,7 @@ def main():
                 "vendi_kernel": str(args.vendi_kernel),
                 "vendi_model": str(args.vendi_model),
                 "vendi_dtype": str(args.vendi_dtype),
+                "vendi_weighting": str(args.vendi_weighting),
                 "before_vendi_sigma_used": vendi_b.get("sigma_used"),
                 "after_vendi_sigma_used": vendi_a.get("sigma_used"),
                 "before_vendi_lambda1_over_trace": vendi_b.get("debug", {}).get("lambda1_over_trace"),
