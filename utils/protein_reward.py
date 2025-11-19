@@ -22,7 +22,7 @@ def make_self_surprise_reward(
     """Create a reward function for TRL GRPO.
 
     Reward per sequence:
-      R = -log p_ref(seq) - first_variation_coef * (log p_pol(seq) - log p_base(seq))
+      R = -log p_ref(seq) - first_variation_coef * (log p_ref(seq) - log p_base(seq))
 
     Also logs in-update approximate KL: mean(log p_pol - log p_ref) per batch to
     {out_dir}/grpo_approx_kl_in_update.csv (defaults to project outputs dir).
@@ -42,14 +42,14 @@ def make_self_surprise_reward(
                 w.writerow(["approx_kl_in_update"])  # header
             w.writerow([float(value)])
 
-    def _append_first_variation(batch_mean_logp_pol: float, batch_mean_logp_base: float, coef: float) -> None:
+    def _append_first_variation(batch_mean_logp_ref: float, batch_mean_logp_base: float, coef: float) -> None:
         exists = os.path.exists(fv_path)
         with open(fv_path, "a", newline="") as f:
             w = csv.writer(f)
             if not exists:
-                w.writerow(["mean_logp_pol", "mean_logp_base", "first_variation_coef", "penalty_value"])  # header
-            penalty = coef * (batch_mean_logp_pol - batch_mean_logp_base)
-            w.writerow([float(batch_mean_logp_pol), float(batch_mean_logp_base), float(coef), float(penalty)])
+                w.writerow(["mean_logp_ref", "mean_logp_base", "first_variation_coef", "penalty_value"])  # header
+            penalty = coef * (batch_mean_logp_ref - batch_mean_logp_base)
+            w.writerow([float(batch_mean_logp_ref), float(batch_mean_logp_base), float(coef), float(penalty)])
 
     def _batched_reward(prompts, completion_ids) -> List[float]:
         ref = trainer.ref_model if getattr(trainer, "ref_model", None) is not None else trainer.model
@@ -89,7 +89,7 @@ def make_self_surprise_reward(
         approx_kl_batch = (seq_logp_pol - seq_logp_ref).mean().item()
         _append_approx_kl(approx_kl_batch)
 
-        # Reward = -log p_ref(seq) - coef * (log p_pol - log p_base)
+        # Reward = -log p_ref(seq) - coef * (log p_ref - log p_base) [first variation of KL(π||p_base) at ref]
         total = -seq_logp_ref
         if base_ref_model is not None and first_variation_coef != 0.0:
             base_ref_model.to(device)
@@ -103,13 +103,13 @@ def make_self_surprise_reward(
                 id_eos,
                 renorm_over_allowed=renorm_over_allowed,
             )
-            # Log batch means for first-variation contribution
+            # Log batch means for first-variation (ref vs base) contribution
             _append_first_variation(
-                batch_mean_logp_pol=float(seq_logp_pol.mean().item()),
+                batch_mean_logp_ref=float(seq_logp_ref.mean().item()),
                 batch_mean_logp_base=float(seq_logp_base.mean().item()),
                 coef=float(first_variation_coef),
             )
-            total = total - first_variation_coef * (seq_logp_pol - seq_logp_base)
+            total = total - first_variation_coef * (seq_logp_ref - seq_logp_base)
         return total.float().cpu().tolist()
 
     def _single_reward(prompt: str, completion: str) -> float:
@@ -138,7 +138,7 @@ def make_self_surprise_reward(
             seq_logp_base = compute_sequence_logprobs(
                 base_ref_model, input_ids, attention_mask, tokenizer, env, aa_ids, id_eos, renorm_over_allowed=renorm_over_allowed
             )
-            total = total - first_variation_coef * (seq_logp_pol - seq_logp_base)
+            total = total - first_variation_coef * (seq_logp_ref - seq_logp_base)
         return float(total.item())
 
     def reward_func(*args, **kwargs):
