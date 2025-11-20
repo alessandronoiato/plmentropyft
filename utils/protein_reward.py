@@ -17,12 +17,13 @@ def make_self_surprise_reward(
     renorm_over_allowed: bool = True,
     base_ref_model=None,
     first_variation_coef: float = 0.0,
+    ref_logp_scale: float = 1.0,
     out_dir: Optional[str] = None,
 ):
     """Create a reward function for TRL GRPO.
 
     Reward per sequence:
-      R = -log p_ref(seq) - first_variation_coef * (log p_ref(seq) - log p_base(seq))
+      R = -ref_logp_scale * log p_ref(seq) - first_variation_coef * (log p_ref(seq) - log p_base(seq))
 
     Also logs in-update approximate KL: mean(log p_pol - log p_ref) per batch to
     {out_dir}/grpo_approx_kl_in_update.csv (defaults to project outputs dir).
@@ -89,8 +90,8 @@ def make_self_surprise_reward(
         approx_kl_batch = (seq_logp_pol - seq_logp_ref).mean().item()
         _append_approx_kl(approx_kl_batch)
 
-        # Reward = -log p_ref(seq) - coef * (log p_ref - log p_base) [first variation of KL(π||p_base) at ref]
-        total = -seq_logp_ref
+        # Reward = -ref_logp_scale * log p_ref(seq) - coef * (log p_ref - log p_base) [first variation of KL(π||p_base) at ref]
+        total = -ref_logp_scale * seq_logp_ref
         if base_ref_model is not None and first_variation_coef != 0.0:
             base_ref_model.to(device)
             seq_logp_base = compute_sequence_logprobs(
@@ -132,7 +133,7 @@ def make_self_surprise_reward(
         # KL logging (single sample)
         approx_kl = (seq_logp_pol - seq_logp_ref).item()
         _append_approx_kl(approx_kl)
-        total = -seq_logp_ref
+        total = -ref_logp_scale * seq_logp_ref
         if base_ref_model is not None and first_variation_coef != 0.0:
             base_ref_model.to(device)
             seq_logp_base = compute_sequence_logprobs(

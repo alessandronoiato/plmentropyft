@@ -102,6 +102,8 @@ def main():
     parser.add_argument("--wandb_tags", type=str, default=None, help="Comma-separated tags")
     parser.add_argument("--no_json_report", action="store_true", help="Skip writing grpo_exact_entropy.json if set")
     parser.add_argument("--wandb_api_key", type=str, default=None, help="Optional WandB API key for programmatic login on compute nodes")
+    # Training-time temperature scaling (mutually exclusive alternative to default training)
+    parser.add_argument("--train_temp_T", type=float, default=1.0, help="Training-time temperature T (>1) to scale -log p_ref by 1/T and auto-set beta=1/(T-1), zero first-variation term")
     args = parser.parse_args()
 
     if GRPOTrainer is None or GRPOConfig is None:
@@ -173,6 +175,20 @@ def main():
     if args.batch_size % args.num_generations != 0:
         raise ValueError("batch_size must be divisible by num_generations for GRPO.")
 
+    # Training-time temperature scaling: compute effective parameters
+    temp_mode = False
+    if args.train_temp_T is not None and float(args.train_temp_T) != 1.0:
+        if float(args.train_temp_T) <= 1.0:
+            raise ValueError("train_temp_T must be > 1.0 when specified.")
+        temp_mode = True
+        ref_logp_scale = 1.0 / float(args.train_temp_T)
+        effective_beta = 1.0 / (float(args.train_temp_T) - 1.0)
+        effective_first_variation_coef = 0.0
+    else:
+        ref_logp_scale = 1.0
+        effective_beta = float(args.beta)
+        effective_first_variation_coef = float(args.first_variation_coef)
+
     grpo_cfg = GRPOConfig(
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size,
@@ -189,7 +205,7 @@ def main():
         num_generations=args.num_generations,
         steps_per_generation=None,
         generation_batch_size=None,
-        beta=args.beta,
+        beta=effective_beta,
         sync_ref_model=True,
         ref_model_sync_steps=1,
         ref_model_mixup_alpha=1.0,
@@ -215,7 +231,8 @@ def main():
         id_eos=eos_id,
         renorm_over_allowed=False,
         base_ref_model=base_model,
-        first_variation_coef=args.first_variation_coef,
+        first_variation_coef=effective_first_variation_coef,
+        ref_logp_scale=ref_logp_scale,
         out_dir=args.out_dir,
     )
 
@@ -241,7 +258,8 @@ def main():
             eos_id,
             renorm_over_allowed=False,
             base_ref_model=base_model,
-            first_variation_coef=args.first_variation_coef,
+            first_variation_coef=effective_first_variation_coef,
+            ref_logp_scale=ref_logp_scale,
             out_dir=args.out_dir,
         )
     ]
@@ -260,8 +278,8 @@ def main():
             "batch_size": args.batch_size,
             "num_generations": args.num_generations,
             "seed": args.seed,
-            "beta": args.beta,
-            "first_variation_coef": args.first_variation_coef,
+            "beta": effective_beta,
+            "first_variation_coef": effective_first_variation_coef,
             "validity_mode": args.validity_mode,
             "fold_dtype": args.fold_dtype,
             "pairwise_distance_mode": args.pairwise_distance_mode,
@@ -273,6 +291,9 @@ def main():
             "vendi_sigma": None if args.vendi_sigma is None else float(args.vendi_sigma),
             "vendi_max_sequences": 0 if args.vendi_max_sequences is None else int(args.vendi_max_sequences),
             "vendi_weighting": str(getattr(args, "vendi_weighting", "prob")),
+            "train_temp_T": float(args.train_temp_T),
+            "train_temp_mode": bool(temp_mode),
+            "train_temp_ref_logp_scale": float(ref_logp_scale),
         }
         wandb_run = maybe_init_wandb(args, wandb_config)
     except Exception:
@@ -376,6 +397,10 @@ def main():
         # theoretical_max_nats removed: not applicable to BPE token-level MC NLL
         "sum_probs_before": sum(p for _, p in seqs_before) if seqs_before else float("nan"),
         "sum_probs_after": sum(p for _, p in seqs_after) if seqs_after else float("nan"),
+        "train_temp_T": float(args.train_temp_T),
+        "train_temp_mode": bool(temp_mode),
+        "effective_beta": float(effective_beta),
+        "effective_first_variation_coef": float(effective_first_variation_coef),
     }
     # Vendi diversity (optional, evaluation-only)
     try:
