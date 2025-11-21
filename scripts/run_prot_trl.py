@@ -168,6 +168,15 @@ def main():
     base_model.requires_grad_(False)
     base_model.to(device)
 
+    # Ensure custom remote code model class is discoverable by TRL's internal checks
+    try:
+        import transformers as _tf_mod
+        _model_cls_name = policy.__class__.__name__
+        if not hasattr(_tf_mod, _model_cls_name):
+            setattr(_tf_mod, _model_cls_name, policy.__class__)
+    except Exception:
+        pass
+
     # Save policy to a local directory so GRPO can reload both policy and ref from the same model path
     artifacts_dir = os.path.join(_PROJECT_ROOT, "artifacts")
     os.makedirs(artifacts_dir, exist_ok=True)
