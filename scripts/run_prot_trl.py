@@ -128,7 +128,7 @@ def main():
     is_local_model = os.path.isdir(args.model_id)
     local_only = args.local_files_only or is_local_model or os.environ.get("HF_HUB_OFFLINE") == "1" or os.environ.get("TRANSFORMERS_OFFLINE") == "1"
 
-    tok = AutoTokenizer.from_pretrained(args.model_id, cache_dir=args.cache_dir, local_files_only=local_only)
+    tok = AutoTokenizer.from_pretrained(args.model_id, cache_dir=args.cache_dir, local_files_only=local_only, trust_remote_code=True)
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
     # Decoder-only models should use left padding for generation
@@ -146,12 +146,12 @@ def main():
     env = ProteinEnv(ProteinConfig(horizon=args.horizon))
 
     # Policy and ref models
-    policy = AutoModelForCausalLM.from_pretrained(args.model_id, cache_dir=args.cache_dir, local_files_only=local_only)
-    ref_model = AutoModelForCausalLM.from_pretrained(args.model_id, cache_dir=args.cache_dir, local_files_only=local_only)
+    policy = AutoModelForCausalLM.from_pretrained(args.model_id, cache_dir=args.cache_dir, local_files_only=local_only, trust_remote_code=True)
+    ref_model = AutoModelForCausalLM.from_pretrained(args.model_id, cache_dir=args.cache_dir, local_files_only=local_only, trust_remote_code=True)
     ref_model.requires_grad_(False)
 
     # Frozen pretrained base policy π0 for first-variation term
-    base_model = AutoModelForCausalLM.from_pretrained(args.model_id, cache_dir=args.cache_dir, local_files_only=local_only)
+    base_model = AutoModelForCausalLM.from_pretrained(args.model_id, cache_dir=args.cache_dir, local_files_only=local_only, trust_remote_code=True)
     base_model.requires_grad_(False)
     base_model.to(device)
 
@@ -164,7 +164,7 @@ def main():
 
     # Keep a frozen handle to the initial (pre-training) policy for "before" evaluations
     before_model_for_eval = AutoModelForCausalLM.from_pretrained(
-        model_path, cache_dir=args.cache_dir, local_files_only=local_only
+        model_path, cache_dir=args.cache_dir, local_files_only=local_only, trust_remote_code=True
     )
     before_model_for_eval.requires_grad_(False)
     before_model_for_eval.eval()
