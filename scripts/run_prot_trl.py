@@ -16,6 +16,8 @@ from transformers import (
     GenerationConfig,
 )
 from transformers.trainer_callback import TrainerCallback
+os.environ["HF_ALLOW_CODE_EXECUTION"] = "1"
+os.environ["TRANSFORMERS_TRUST_REMOTE_CODE"] = "1"
 
 try:
     from trl.trainer.grpo_trainer import GRPOTrainer
