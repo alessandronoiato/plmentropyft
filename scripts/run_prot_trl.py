@@ -238,7 +238,7 @@ def main():
 
     # Trainer
     trainer = GRPOTrainer(
-        model=model_path,
+        model=policy,
         reward_funcs=[reward_fn],
         args=grpo_cfg,
         train_dataset=train_ds,
