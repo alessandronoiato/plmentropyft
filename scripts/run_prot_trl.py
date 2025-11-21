@@ -16,6 +16,17 @@ from transformers import (
     GenerationConfig,
 )
 from transformers.trainer_callback import TrainerCallback
+
+# Ensure remote code is trusted in non-interactive/batch environments and monkeypatch AutoConfig
+import os as _os
+_os.environ["HF_ALLOW_CODE_EXECUTION"] = "1"
+_os.environ["TRANSFORMERS_TRUST_REMOTE_CODE"] = "1"
+from transformers import AutoConfig as _AutoConfig
+_old_ac_from_pretrained = _AutoConfig.from_pretrained
+def _ac_from_pretrained_trust(*args, **kwargs):
+    kwargs.setdefault("trust_remote_code", True)
+    return _old_ac_from_pretrained(*args, **kwargs)
+_AutoConfig.from_pretrained = _ac_from_pretrained_trust
 os.environ["HF_ALLOW_CODE_EXECUTION"] = "1"
 os.environ["TRANSFORMERS_TRUST_REMOTE_CODE"] = "1"
 
