@@ -104,6 +104,13 @@ class ProGen2Wrapper:
             if not hasattr(self.model.config, 'architectures') or not self.model.config.architectures:
                 self.model.config.architectures = ["ProGenForCausalLM"]
             
+            # Add missing config attributes that TRL expects
+            import transformers as _tf
+            if not hasattr(self.model.config, 'transformers_version'):
+                self.model.config.transformers_version = _tf.__version__
+            if not hasattr(self.model.config, '_name_or_path'):
+                self.model.config._name_or_path = model_path
+            
             # Register the class on transformers module for TRL compatibility
             # TRL does: architecture = getattr(transformers, config.architectures[0])
             transformers.ProGenForCausalLM = ProGenForCausalLM
