@@ -115,8 +115,8 @@ def main():
     parser.add_argument("--wandb_tags", type=str, default=None, help="Comma-separated tags")
     parser.add_argument("--no_json_report", action="store_true", help="Skip writing grpo_exact_entropy.json if set")
     parser.add_argument("--wandb_api_key", type=str, default=None, help="Optional WandB API key for programmatic login on compute nodes")
-    # Training-time temperature scaling (mutually exclusive alternative to default training)
-    parser.add_argument("--train_temp_T", type=float, default=1.0, help="Training-time temperature T (>1) to scale -log p_ref by 1/T and auto-set beta=1/(T-1), zero first-variation term")
+    # Entropy coefficient (μ) for the first variation of entropy
+    parser.add_argument("--entropy_coef", type=float, default=1.0, help="Entropy coefficient μ; reward = -(μ + η)*log p_ref + η*log p_base where η=first_variation_coef")
     args = parser.parse_args()
 
     if GRPOTrainer is None or GRPOConfig is None:
@@ -197,19 +197,10 @@ def main():
     if args.batch_size % args.num_generations != 0:
         raise ValueError("batch_size must be divisible by num_generations for GRPO.")
 
-    # Training-time temperature scaling: compute effective parameters
-    temp_mode = False
-    if args.train_temp_T is not None and float(args.train_temp_T) != 1.0:
-        if float(args.train_temp_T) <= 1.0:
-            raise ValueError("train_temp_T must be > 1.0 when specified.")
-        temp_mode = True
-        ref_logp_scale = 1.0 / float(args.train_temp_T)
-        effective_beta = 1.0 / (float(args.train_temp_T) - 1.0)
-        effective_first_variation_coef = 0.0
-    else:
-        ref_logp_scale = 1.0
-        effective_beta = float(args.beta)
-        effective_first_variation_coef = float(args.first_variation_coef)
+    # Effective coefficients: μ (entropy_coef) and η (first_variation_coef)
+    effective_entropy_coef = float(args.entropy_coef)
+    effective_beta = float(args.beta)
+    effective_first_variation_coef = float(args.first_variation_coef)
 
     grpo_cfg = GRPOConfig(
         per_device_train_batch_size=args.batch_size,
@@ -254,7 +245,7 @@ def main():
         renorm_over_allowed=False,
         base_ref_model=base_model,
         first_variation_coef=effective_first_variation_coef,
-        ref_logp_scale=ref_logp_scale,
+        entropy_coef=effective_entropy_coef,
         out_dir=args.out_dir,
     )
 
@@ -281,7 +272,7 @@ def main():
             renorm_over_allowed=False,
             base_ref_model=base_model,
             first_variation_coef=effective_first_variation_coef,
-            ref_logp_scale=ref_logp_scale,
+            entropy_coef=effective_entropy_coef,
             out_dir=args.out_dir,
         )
     ]
@@ -301,6 +292,7 @@ def main():
             "num_generations": args.num_generations,
             "seed": args.seed,
             "beta": effective_beta,
+            "entropy_coef": effective_entropy_coef,
             "first_variation_coef": effective_first_variation_coef,
             "validity_mode": args.validity_mode,
             "fold_dtype": args.fold_dtype,
@@ -313,9 +305,6 @@ def main():
             "vendi_sigma": None if args.vendi_sigma is None else float(args.vendi_sigma),
             "vendi_max_sequences": 0 if args.vendi_max_sequences is None else int(args.vendi_max_sequences),
             "vendi_weighting": str(getattr(args, "vendi_weighting", "prob")),
-            "train_temp_T": float(args.train_temp_T),
-            "train_temp_mode": bool(temp_mode),
-            "train_temp_ref_logp_scale": float(ref_logp_scale),
         }
         wandb_run = maybe_init_wandb(args, wandb_config)
     except Exception:
@@ -419,16 +408,15 @@ def main():
         # theoretical_max_nats removed: not applicable to BPE token-level MC NLL
         "sum_probs_before": sum(p for _, p in seqs_before) if seqs_before else float("nan"),
         "sum_probs_after": sum(p for _, p in seqs_after) if seqs_after else float("nan"),
-        "train_temp_T": float(args.train_temp_T),
-        "train_temp_mode": bool(temp_mode),
-        "effective_beta": float(effective_beta),
-        "effective_first_variation_coef": float(effective_first_variation_coef),
+        "entropy_coef": float(effective_entropy_coef),
+        "first_variation_coef": float(effective_first_variation_coef),
+        "beta": float(effective_beta),
     }
     # Vendi diversity (optional, evaluation-only)
     try:
         if bool(getattr(args, "compute_vendi", False)):
             # Internal device selection (no CLI): prefer CUDA if available
-            vendi_device = "cuda" if (torch.cuda.is_available() and torch.cuda.device_count() > 0) else "cpu"
+                vendi_device = "cuda" if (torch.cuda.is_available() and torch.cuda.device_count() > 0) else "cpu"
             # Weighted sequences and optional weighted subsample
             def _extract_sequences_and_weights(seqs: List[Tuple[str, float]]) -> Tuple[List[str], List[float]]:
                 s_list = [a for a, _ in seqs]
@@ -459,7 +447,7 @@ def main():
                     seqs_b, weights_b = _weighted_subsample(seqs_b, weights_b, int(args.vendi_max_sequences))
                 vendi_b = vendi_from_sequences(
                     seqs_b,
-                    weights=weights_b,
+                weights=weights_b,
                     model_name=str(args.vendi_model),
                     device=vendi_device,
                     dtype=str(args.vendi_dtype),
@@ -475,7 +463,7 @@ def main():
                     seqs_b,
                     weights=None,
                     model_name=str(args.vendi_model),
-                    device=vendi_device,
+                device=vendi_device,
                     dtype=str(args.vendi_dtype),
                     batch_size=int(args.vendi_batch_size),
                     kernel=str(args.vendi_kernel),
@@ -488,7 +476,7 @@ def main():
                     seqs_a, weights_a = _weighted_subsample(seqs_a, weights_a, int(args.vendi_max_sequences))
                 vendi_a = vendi_from_sequences(
                     seqs_a,
-                    weights=weights_a,
+                weights=weights_a,
                     model_name=str(args.vendi_model),
                     device=vendi_device,
                     dtype=str(args.vendi_dtype),
@@ -503,12 +491,12 @@ def main():
                     seqs_a,
                     weights=None,
                     model_name=str(args.vendi_model),
-                    device=vendi_device,
+                device=vendi_device,
                     dtype=str(args.vendi_dtype),
                     batch_size=int(args.vendi_batch_size),
                     kernel=str(args.vendi_kernel),
                     sigma=None if args.vendi_sigma is None else float(args.vendi_sigma),
-                )
+            )
             # Update report with Vendi metrics and context
             report.update({
                 "before_vendi_score": float(vendi_b.get("vendi_score", float("nan"))),
@@ -587,8 +575,8 @@ def main():
                 "hausdorff_post_to_pre_q": float(post_to_pre_q),
                 "hausdorff_symmetric_q": float(sym_q),
             })
-    except Exception:
-        pass
+            except Exception:
+                pass
     # (Removed) Vendi diversity computation
     # When esmfold validity is active, summarize pLDDT
     if args.validity_mode == "esmfold":
@@ -632,8 +620,8 @@ def main():
 
     # Write JSON unless disabled
     if not args.no_json_report:
-        with open(os.path.join(args.out_dir, "grpo_exact_entropy.json"), "w") as f:
-            json.dump(report, f, indent=2)
+    with open(os.path.join(args.out_dir, "grpo_exact_entropy.json"), "w") as f:
+        json.dump(report, f, indent=2)
     # 'after_sequence_probs.csv' already written by dump_sequence_probs
     try:
         wandb_finish(wandb_run)

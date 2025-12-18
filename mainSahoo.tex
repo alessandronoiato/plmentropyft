@@ -1,0 +1,2301 @@
+\documentclass{article} %
+\PassOptionsToPackage{numbers, compress}{natbib}
+\usepackage[final]{neurips_2024}
+\input{math_commands.tex}
+\usepackage{lipsum} 
+\usepackage[utf8]{inputenc} %
+\usepackage[T1]{fontenc}    %
+\usepackage{xr-hyper}
+\usepackage{hyperref}       %
+\usepackage[page,toc,titletoc,title]{appendix}
+\usepackage[capitalize]{cleveref}
+\usepackage{cancel}
+\hypersetup{
+	final,
+	colorlinks,
+	linkcolor=ourred,
+	citecolor=ourblue,
+	urlcolor=url,
+}
+\usepackage{url}            %
+\usepackage{booktabs}       %
+\usepackage{amsfonts}       %
+\usepackage{nicefrac}       %
+\usepackage{microtype}      %
+\usepackage{xcolor}         %
+\usepackage{graphicx}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage[normalem]{ulem}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{float}
+\usepackage{bm}
+\usepackage{cases}
+\usepackage[
+	disable,
+	textsize=tiny,
+	textwidth=2.2cm
+	]{todonotes}
+\usepackage{blindtext}
+\usepackage{textcomp}
+\usepackage{mathtools}
+\usepackage{xargs}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{wrapfig}
+\usepackage{array}
+
+
+
+\usepackage{multirow}
+\usepackage[subtle]{savetrees}
+
+
+\newcolumntype{L}{>{\arraybackslash}m{2.8cm}}
+\newcolumntype{C}{>{\centering\arraybackslash}m{1.5cm}}
+
+
+\newlength{\itemwidth}
+
+\input{header}
+
+\definecolor{ourblue}{rgb}{0.368,0.507,0.71}
+\definecolor{ourgreen}{rgb}{0.56,0.692,0.195}
+\definecolor{ourred}{rgb}{0.923,0.386,0.209}
+\definecolor{url}{HTML}{d95225}
+
+
+
+\newcommand{\vkl}[1]{\textcolor{blue}{[VK: #1]}}
+\newcommand{\subham}[1]{\textcolor{red}{[subham: #1]}}
+\newcommand{\justin}[1]{\textcolor{green}{[Justin: #1]}}
+\newcommand{\yair}[1]{\textcolor{cyan}{[Yair: #1]}}
+\newcommand{\marianne}[1]{\textcolor{brown}{[Marianne: #1]}}
+\newcommand{\edgar}[1]{\textcolor{orange}{[Edgar: #1]}}
+
+\def\method{SUBS}
+\def\algo{MDLM}
+\def\oneb{LM1B}
+\def\owt{OWT}
+\def\ppl{ppl}
+\def\qunsimplified{\text{$\text{q}_\text{unsimplified}$}}
+\def\prior{\text{$\boldsymbol{\mathit{\pi}}$}}
+\def\onehotset{\mathcal{V}}
+\def\k{{K + 1}}
+
+\makeatletter
+
+
+\makeatother
+
+
+\title{Simple and Effective \\ Masked Diffusion Language Models}
+
+\author{%
+  Subham Sekhar Sahoo\\
+  Cornell Tech, NYC, USA.\\
+  \texttt{ssahoo@cs.cornell.edu} \\
+  \And
+  Marianne Arriola\\
+  Cornell Tech, NYC, USA.\\
+  \texttt{ma2238@cornell.edu}\\
+  \And
+  Yair Schiff\\
+  Cornell Tech, NYC, USA.\\
+  \texttt{yzs2@cornell.edu}
+  \And
+  Aaron Gokaslan\\
+  Cornell Tech, NYC, USA.\\
+  \texttt{akg87@cs.cornell.edu} \\
+  \And
+  Edgar Marroquin\\
+  Cornell Tech, NYC, USA.\\
+  \texttt{emm392@cornell.edu} \\
+  \And
+  Justin T Chiu\\
+  Cornell Tech, NYC, USA.\\
+  \texttt{jtc257@cornell.edu}\\
+  \And
+  Alexander Rush\\
+  Cornell Tech, NYC, USA.\\
+  \texttt{ar459@cornell.edu}\\
+  \And
+  Volodymyr Kuleshov\\
+  Cornell Tech, NYC, USA.\\
+  \texttt{kuleshov@cornell.edu} \\
+}
+
+
+\begin{document}
+
+
+\maketitle
+
+
+\begin{abstract}
+While diffusion models excel at generating high-quality images, prior work reports a significant performance gap between diffusion and autoregressive (AR) methods in language modeling.
+In this work, we show that simple masked discrete diffusion is more performant than previously thought.
+We apply an effective training recipe that improves the performance of masked diffusion models and derive a simplified, Rao-Blackwellized objective that results in additional improvements.
+Our objective has a simple form---it is a mixture of classical masked language modeling losses---and can be used to train encoder-only language models that admit efficient samplers, including ones that can generate arbitrary lengths of text semi-autoregressively like a traditional language model.
+On language modeling benchmarks, a range of masked diffusion models trained with modern engineering practices achieves a new state-of-the-art among diffusion models, and approaches AR perplexity. We provide the code\footnote{code: \href{https://github.com/kuleshov-group/mdlm}{https://github.com/kuleshov-group/mdlm}}, along with a blog post and video tutorial\footnote{tutorial: \href{http://youtu.be/WjAUX23vgfg}{http://youtu.be/WjAUX23vgfg}} on the project page:
+\looseness=-1
+
+\vspace{0.3ex}
+\centerline{\href{https://s-sahoo.com/mdlm}{https://s-sahoo.com/mdlm}}
+
+
+
+\end{abstract}
+
+
+\section{Introduction}
+
+Diffusion models excel at producing realistic, high-quality images and have 
+received significant attention as potential tools for generating discrete data, such as text \citep{austin2021structured, li2021discovering, lou2023discrete}, biological sequences \citep{avdeyev2023dirichlet,rastogi2023semi}, and graphs \citep{sun2023difusco, vignac2022digress}. 
+Unlike autoregressive (AR) approaches, diffusion-based methods are not constrained to generate data sequentially, and therefore have the potential to improve long-term planning, controllable generation, and sampling speed. %
+However, discrete diffusion methods exhibit a performance gap relative to AR models \citep{austin2021structured, gulrajani2024plaid, he2022diffusionbert, lou2023discrete},
+especially in language modeling. %
+The standard measure of language modeling performance is log-likelihood: 
+when controlling for parameter count, prior work reports a sizable log-likelihood gap between AR and diffusion models.
+
+
+In this work, we show that simple masked diffusion language modeling (MDLM) combined with effective training recipes 
+is more performant than previously thought \citep{austin2021structured,he2022diffusionbert,zheng2023reparameterized}.
+We develop a well-engineered MDLM implementation that significantly improves discrete diffusion log-likelihood; we further improve likelihood using a simple substitution-based parameterization of the reverse diffusion process that enables
+deriving a Rao-Blackwellized continuous-time variational lower bound (ELBO) with improved tightness \cite{sahoo2023backpropagation}.
+Interestingly, our objective has a simple form: it is a weighted average of masked language modeling (MLM) losses \citep{devlin2018bert}, and can be used to endow BERT-style, encoder-only models with principled generation capabilities.
+We complement this framework with efficient samplers---including ones that can generate semi-autoregressively like a typical language model.
+
+Our masked diffusion models achieve a new state-of-the-art among diffusion models on language modeling benchmarks and approach the perplexity of AR models within 15-25\%. 
+Surprisingly, simple engineering choices significantly improve performance in both our models and simple baselines that were previously thought to perform poorly.
+Our framework also extends to non-language domains, including biological sequence modeling.
+We pre-train DNA sequence models and observe  similar or higher  downstream performance compared to classical BERT-style training, while also introducing generative capabilities that classical masked DNA language models lack.
+
+\paragraph{Contributions}  
+We describe (1) a simple masked diffusion language modeling (MDLM) framework with a well-engineered implementation that outperforms all existing diffusion models across language modeling benchmarks (\oneb{}~\citep{chelba2014billion}, \owt{}~\citep{Gokaslan2019OpenWeb}, DNA~\citep{genome2009genome}),
+and that significantly improves the performance of existing baselines \citep{austin2021structured,he2022diffusionbert}.
+Our MDLM framework
+implements (2a) a substitution-based parameterization (\method{}) of the reverse unmasking diffusion process; \method{} allows us to derive (2b) a simple, continuous-time, Rao-Blackwellized objective that improves tightness and variance of the ELBO, further increasing performance.
+We complement MDLM with (3) fast samplers that support semi-autoregressive (SAR) generation and outperform previous SAR models.
+\begin{figure}[t!]
+    \centering
+        \vspace{-2mm}
+    \includegraphics[width=\linewidth]{figures/graphical_abstract_updated_3.png}
+    \caption{\textit{(Left)} Our proposed masked diffusion language model (MDLM) is trained using a weighted average of masked cross entropy losses.
+    (\textit{Top Right}) In comparison to masked language models (MLM), MDLM's objective
+    correspond to a principled variational lower bound, and supports generation via ancestral sampling.
+    (\textit{Bottom Right}) Perplexity (PPL) on One Billion Words (LM1B) benchmark.
+    \vspace{-2mm}
+    }
+    \label{fig:graphical_abstract}
+\end{figure}
+
+
+\section{Background}
+
+\subsection{Diffusion Models}\label{subsec:background_diffusion}
+Diffusion models are trained to iteratively undo a forward corruption process $q$ that takes clean data $\x$ drawn from the data distribution $q(\x)$ and defines latent variables $\z_t$ for $t \in [0, 1]$  that represent progressively noisy versions of $\x$ \citep{ho2020denoising, sohl2015deep, song2020score, wang2023infodiffusion,sahoo2023mulan,gokaslan2024commoncanvas}.
+The standard forward process for continuous $\x$ is
+\begin{equation}\label{eqn:ddpm_maginal}
+    \z_t = \sqrt{\alpha_t}  \x + \sqrt{1 - \alpha_t}  \boldsymbol\epsilon
+\end{equation}
+where $\boldsymbol\epsilon \sim \mathcal{N}(\mathbf{0}, \mathbf{I})$ and $(\alpha_t)_{t \in [0,1]}$ is a noise schedule, monotonically decreasing in $t$.
+The parameterized reverse diffusion model $p_\theta$ over $\x$ and $\z_t$ is trained to maximize a variational lower bound on log-likelihood (ELBO).
+Given a number of discretization steps $T,$ defining $s(i) = (i -1)/T$ and $ t(i) = i /T$, and using $\KL[\cdot]$ to denote the Kullback–Leibler divergence,
+the Negative ELBO (NELBO) equals~\citep{sohl2015deep}:
+{\footnotesize
+\begin{align}\label{eqn:elbo}
+    \E_q\Bigg[\underbrace{- \log p_\theta(
+    \x | \z_{t(0)})}_{\normalsize
+    \begin{array}{c}\lossrecons\end{array}} + \underbrace{\sum_{i=1}^T \KL[q(\z_{s(i)} | \z_{t(i)}, \x) \| p_\theta(\z_{s(i)} | \z_{t(i)})]}_{\normalsize
+    \begin{array}{c}\lossdiff\end{array}}\Bigg]
+    + \underbrace{\KL[q(\z_{t(T)} | \x) \| p_\theta(\z_{t(T)})]}_{\normalsize
+    \begin{array}{c}\lossprior\end{array}}
+\end{align}
+}
+
+For brevity, we drop $i$ from $t(i)$ and $s(i)$ below; in general, $s$ will denote the time step before $t$.
+
+
+
+\subsection{Discrete Diffusion Models}\label{subsec:background_discrete}
+Applications of diffusion modeling to discrete data can be broken into two broad categories.
+First are works that embed discrete structures in continuous space and then perform the Gaussian diffusion defined above on these continuous representations \citep{chen2022analog, dieleman2022continuous, 
+gulrajani2024plaid, han2022ssd, li2022diffusion, lovelace2024latent, strudel2022self}.
+More related to our method are works that define a diffusion process directly on discrete structures.
+D3PM \citep{austin2021structured} introduces a framework with a  Markov forward process $q(\z_t | \z_{t-1}) = \cat( \z_t ; Q_t \z_{t-1})$ defined by the multiplication of matrices $Q_t$ over $T$ discrete time steps.
+This process induces marginals
+\begin{equation} \label{eq:d3pm_maginal}
+    q(\z_t | \x) = \cat(\z_t ; \bar Q_t \x)  = \cat(\z_t ; Q_t \cdot Q_{t-1} \cdots Q_1 \x)
+\end{equation}
+that represent the discrete-state form of \Eqn{eqn:ddpm_maginal}.
+Extending this formalism to continuous time (as in \Eqn{eqn:ddpm_maginal}) relies on continuous time Markov chain (CTMC) theory
+\cite{campbell2022continuous}.
+The CTMC framework in turns leads to generalizations of the score matching perspective on diffusion modeling \citep{song2019generative} to discrete data \citep{ lou2023discrete, sun2022score}.
+Notably,
+SEDD \citep{lou2023discrete} connects score-based approaches with ELBO maximization, enabling performant likelihood-based training of score-based models.
+
+
+
+
+
+
+
+\section{Simple Masked Diffusion Models}
+While previous work on discrete diffusion supports general forward processes (e.g., general $Q_t$ in D3PM), absorbing state (i.e., masking) diffusion consistently achieves the best performance \citep{austin2021structured, lou2023discrete}.
+In this work, instead of supporting general noise processes, we 
+focus on masking and derive tight Rao-Blackwellized objectives that outperform general approaches and do not require CTMC theory. 
+In this section, we first define the diffusion process for a categorical random variable. Later in~\sec{subsec:mdlm}, we extend this process to sequences containing multiple such categorical variables. We denote our overall approach as Masked Diffusion Language Models (MDLM).
+
+\paragraph{Notation.}
+We denote scalar discrete random variables with $K$ categories as `one-hot' column vectors and define $\onehotset \in \{\x \in \{0, 1\}^K: \sum_{i=1}^K \x_i = 1\}$ as the set of all such vectors.
+Define $\cat(\cdot;\prior)$ as the categorical distribution over $K$ classes with probabilities given by $\prior \in \Delta^{K}$, where $\Delta^{K}$ denotes the $K$-simplex.
+We also assume that 
+the $K$-th category
+corresponds to a special \mask token and let $\m \in \onehotset$ be the one-hot vector for this mask, i.e., $\m_{K} = 1$.
+Additionally, let $\vone = \{1\}^{K}$ and
+$\langle \mathbf{a}, \mathbf{b} \rangle$ and $\mathbf{a} \odot \mathbf{b}$ respectively denote the dot and Hadamard products between two vectors $\mathbf{a}$ and $\mathbf{b}$.
+
+\subsection{Interpolating Discrete Diffusion}\label{sec:interpolating_diffusion}
+
+
+We restrict our attention to
+forward processes $q$
+that interpolate between clean data $\x \in \onehotset$ and a target distribution $\cat(.; \prior{})$, forming a direct extension of Gaussian diffusion in \Eqn{eqn:ddpm_maginal}.
+Let $q$ define a sequence of increasingly noisy latent variables $\z_t \in \onehotset$, where the time step $t$ runs from $t=0$ (least noisy) to $t=1$ (most noisy).
+The marginal of $\z_t$ conditioned on $\x$ at time $t$ is  %
+\begin{align}\label{eqn:interpolating_forward}
+    q(\z_t | \x) = \cat(\z_t; \at \x + (1 - \at) \prior{}),
+\end{align}
+where $\alpha_t \in [0, 1]$
+is a strictly decreasing function in $t$, with $\alpha_{0} \approx 1$ and $\alpha_{1} \approx 0$; see~\supp{sup:subsec:noise_schedule_variance} for details.
+This implies transition probabilities $q(\z_t | \z_s) = \cat(\z_t ; \ats \z_s + (1 - \ats) \prior{})$, where $\ats = \at/\as$. This indicates that during each diffusion step from $s \to t$,
+a fraction $(1 - \ats)$ of the probability mass is transferred to the prior distribution $\prior{}$.
+The reverse posterior is given as (see \supp{supp:eqn:d3pm_posterior_generic} for details):
+\begin{align}\label{eqn:true_posterior_unsimplified}
+    q(\z_s | \z_t, \x) =
+        \cat \left(\z_s;
+            \frac{[\ats \z_t + (1 - \ats)\vone \prior^\top \z_t]  \odot [\as \x + (1 - \as) \prior]}{
+             \at \z_t^\top \x  + (1 - \at)\z_t^\top\prior} \right).
+\end{align}
+While \Eqn{eqn:interpolating_forward} and \Eqn{eqn:true_posterior_unsimplified} represent a special case of the more general diffusion processes proposed in D3PM~\citep{austin2021structured},
+we show below that they yield a simplified variational lower bound objective and admit straightforward continuous time extensions.
+
+\subsection{Masked Diffusion}\label{sec:masked_diffusion}
+
+
+
+Next, we focus on masking processes
+and derive a simple Rao-Blackwellized objective for this choice of $q$.
+This objective incurs lower variance during training and improves tightness.
+
+\subsubsection{Forward  Masking Process}
+
+In masked (i.e., absorbing state) diffusion, we set $\prior = \m$. At each noising step, $t$, the input $\x$ transitions to a `masked' state $\m$ with some probability.
+If an input transitions to $\m$ at any time $t'$, it will remain in this state for all $t > t': q(\z_t \mid \z_{t'} = \m) = \cat(\z_t; \m).$
+At time $T$, all inputs are masked with probability 1.
+
+The marginal of the forward process (\ref{eqn:interpolating_forward}) is given by 
+$q(\z_t| \x) = \cat(\z_t; \at \x + (1 - \at) \m).$
+Using properties of the masking process, the posterior $q(\z_s | \z_t, \x)$ simplifies (\ref{eqn:true_posterior_unsimplified}); see \supp{supp:subsec:d3pm_absorbing}:
+\begin{align}\label{eqn:true_posterior}
+    q(\z_s | \z_t, \x) =
+    \begin{cases}
+        \cat (\z_s; \z_t) & \z_t \neq \m, \\
+        \cat \left( \z_s; \frac{
+        (1 - \as)\m + (\as - \at)\x}{1 - \at}\right) & \z_t=\m. 
+    \end{cases}
+\end{align}
+
+\subsubsection{Reverse Unmasking Process}
+\label{sec:reverse-unmasking}
+
+
+The reverse process 
+inverts the noise process defined by $q$.
+We consider both a finite number of steps $T$, as well as a continuous time model corresponding to $T \to \infty$.
+We begin with the discrete-time case for which the generative model is expressed as
+    $
+    \p(\x) = \int_\z \p(\z_{1})\p(\x | \z_{0}) \prod_{i=1}^T\p(\z_s | \z_t)\text{d}\z_{0:1}.
+    $
+
+The optimal form for $\p(\z_s | \z_t)$ matches the true posterior in (\ref{eqn:true_posterior}): this follows immediately from the definition of the diffusion objective in (\ref{eqn:elbo}), which is a sum of terms of the form $\kl(q(\z_{s} | \z_{t}, \x) \| \p(\z_{s} | \z_{t}))$. 
+However, (\ref{eqn:true_posterior}) is conditioned on $\x$, which we do not know.
+Therefore, we introduce a model $\x_\theta(\z_t, t): \onehotset \times [0, 1] \rightarrow \Delta^{K}$ that approximates $\x$ with a neural network.
+We can also omit explicit dependence of $\x_\theta$ on time $t$, which simplifies sampling, yielding a 2x inference speed-up (see \supp{app:caching}).
+
+
+
+
+
+\subsubsection{\method{} Parameterization}\label{subsec:subs}
+The specific parameterization for $\p(\z_s | \z_t)$ that we use is
+\begin{align}\label{eqn:approx_posterior}
+    \p(\z_s | \z_t) =
+    q(\z_s | \z_t, \x=\xapprox) =
+    \begin{cases}
+        \cat (\z_s; \z_t), & \z_t \neq \m, \\
+        \cat \left( \z_s; \frac{
+        (1 - \as)\m + (\as - \at)\xapprox}{1 - \at}\right). & \z_t=\m,
+    \end{cases}
+\end{align}
+Furthermore, we induce 2 key properties of the absorbing state diffusion process into our denoising model, $\xapprox$: an unmasked token remains unchanged during reverse diffusion, and the clean input is never masked.
+We implement these as substitutions to the output of $\xapprox$, hence we call our parameterization SUBS.
+\paragraph{Zero Masking Probabilities}
+First, notice that by definition, $\langle \x, \m \rangle = 0$.
+For this reason, we design the denoising network such that  $\xapproxm = 0$, i.e., we substitute the logit index corresponding to the \mask token with $-\infty$.
+
+\paragraph{Carry-Over Unmasking}
+Second, if $\z_t$ is unmasked, then we desire $\xapprox = \z_t$, i.e., unmasked latents are `carried over'.
+We accomplish this by substituting the output of our network to simply copy unmasked inputs. %
+
+In \supp{supp:subsec:mdlm_rb}, we show that ``Zero Masking Probabilities'' property simplifies the D3PM's NELBO~\Eqn{supp:eqn:elbo_d3pm} to \Eqn{subsec:eqn:d3pm_elbo_rb2}, and ``Carry-Over Unmasking'' futher simplifies~\Eqn{subsec:eqn:d3pm_elbo_rb2} to~\Eqn{supp:eqn:elbo_mdlm_discrete} whose continuous time equivalent is the simplified NELBO~\Eqn{eqn:dif_loss_cont_subs}. \tab{tab:lm1b-ablation} shows that each simplification leads to an improved likelihood. 
+
+
+
+
+
+
+\subsection{Rao-Blackwellized Likelihood Bounds}
+
+
+Recall from \Eqn{eqn:elbo} that the diffusion traning objective has the form $\lossrecons + \lossdiff + \lossprior$.
+For the simplified reverse process in \Eqn{eqn:approx_posterior}, the discrete-time diffusion loss for finite $T$ simplifies to (\supp{supp:subsec:mdlm_discrete}):
+{
+\begin{align} \label{eqn:simplified_diffusion_loss}
+    \lossdiff &= \sum_{i=1}^T  \mathbb{E}_q[ \kl(q(\z_{\s} | \z_{\t}, \x) \| \p(\z_{\s} | \z_{\t}))] = \sum_{i=1}^T \mathbb{E}_q 
+    \left[\frac{\ati - \asi}{1 - \ati} \log \xapproxumi \right]
+\end{align}}
+Note that this objective is simpler and more well-behaved than the expression one would obtain for $\kl(q(\z_{s} | \z_{t}, \x) \| \p(\z_{s} | \z_{t}))$ under the parameterization induced by using $\p(\z_s | \z_t) = q(\z_s | \z_t, \x=\xapprox)$ from \Eqn{eqn:true_posterior_unsimplified}, which is similar to what is used by D3PM \citep{austin2021structured} (see~\supp{supp:subsec:d3pm_nelbo}): %
+{\footnotesize
+\begin{align}\label{eqn:unsimplified_diffusion_loss}
+    \left[\frac{\as - \at}{1 - \at} \log \frac{\at \xapproxm + (1 - \at)}{(1 - \at) \xapproxum} 
+    + \frac{1 - \as}{1 - \at}\log \frac{(1 - \as)(\at \xapproxm + (1 - \at))}{(1 - \at)(\as \xapproxm + (1 - \as))} \right] \xtm
+\end{align}
+}
+We refer to the process of obtaining \Eqn{eqn:simplified_diffusion_loss} in lieu of \Eqn{eqn:unsimplified_diffusion_loss} as a form of Rao-Blackwellization.
+Specifically, we analytically compute expectations such as $\xapproxm = 0$ in order to simplify objective \Eqn{eqn:unsimplified_diffusion_loss} to obtain \Eqn{eqn:simplified_diffusion_loss}.
+Without analytical simplifications, a model must learn $\theta$ such that $\xapproxm = 0$ holds.
+Unlike in regular Rao-Blackwellization, simplifications are possible because of modeling choices for $\xapprox$ (zero masking probabilities and carry-over unmasking). 
+In that sense, our approach has similarities to graphical modeling, where incorporating conditional independencies into $\p$ sets certain log-likelihood terms to zero.
+However, our approach also empirically helps reduce variance, hence we refer to it as Rao-Blackwellization, somewhat abusing the usual terminology.
+
+\subsection{Continuous-Time Likelihood Bounds}\label{subsec:continuous_elbo}
+Previous works have shown empirically and mathematically that increasing the number of steps $T$ yields a tighter approximation to the ELBO \citep{kingma2021variational}.
+Following a similar argument, we form an continuous extension of \Eqn{eqn:simplified_diffusion_loss} by taking $T \to \infty$ (see~\supp{supp:subsec:mdlm_continuous}), which yields the following NELBO, $\lossnelbo$:
+\begin{align}\label{eqn:dif_loss_cont_subs}
+    \lossnelbo
+    = \mathbb{E}_{q}\int_{t=0}^{t=1} \frac{\dat}{1 - \at} \log \xapproxum \d t
+\end{align}
+\paragraph{Invariance to the noise schedule}
+The function $\at$ is invertible due to the monotonicity assumption in \sec{sec:interpolating_diffusion}, and so we can perform the following change of variables in~\Eqn{eqn:dif_loss_cont_subs}:~ $\ns \equiv \log(1 - \at)$. Thus, the diffusion loss can be equivalently expressed as
+$\lossnelbo  
+= - \mathbb{E}_{q}\int_{\ns = -\infty}^{\ns = 0} \log \langle \x_{\theta}(\z_\ns, \ns), \x \rangle \d \ns$; see~\supp{supp:subsec:elbo_invariance} for details.
+This new formulation demonstrates that the diffusion loss is invariant to the functional form of $\at,$ which we verify empirically 
+in~\supp{sup:subsec:noise_schedule_variance}.
+
+
+
+\subsection{Masked Diffusion Language Models}\label{subsec:mdlm}
+
+
+Next, we apply masked diffusion to language modeling over sequences $\x^{1:L}$ of $L$ tokens, with $\x^{\ell}$ denoting the $\ell$-th token.
+We make the assumption that the forward noising process is applied independently across a sequence and that, conditioned on a sequence of latents $\z_t^{1:L},$ the denoising process factorizes independently across tokens, i.e., $p_\theta(\z_s^{1:L} \mid \z_t^{1:L}) = \prod_{\ell=1}^Lp_\theta(\z_s^{\ell} \mid \z_t^{1:L}).$
+Thus, we use a single model to compute $\denoise^\ell(\z_t^{1:L}, t)$ for each $\ell$ from a masked sequence $\z_t$, optimizing:
+\begin{align}\label{eqn:dif_loss_cont_subs_multidim}
+    \lossnelbo = \mathbb{E}_{q}\int_{t=0}^{t=1} \frac{\dat}{1 - \at} \sum_{\ell} \log \langle \denoise^\ell(\z_t^{1:L}, t), \x^\ell \rangle \d t
+\end{align}
+Interestingly, our
+objective has a simple form: it is the weighted average of masked language modeling (MLM) losses \citep{devlin2018bert}.
+Thus our work establishes a connection between generative diffusion models and encoder-only BERT models. Our objective enables principled selection of a (randomized) masking rate, and also endows BERT-style models with principled generation capabilities; see \sec{sec:discussion}. The full training algorithm is provided in~\supp{app:subsec:mdlm_training}.
+
+\textbf{Note:} Although ~\Eqn{eqn:dif_loss_cont_subs_multidim} imposes a loss on all tokens, unmasked tokens don't contribute to the loss, as they are copied over by the denoising network due to “carry-over unmasking” (\sec{subsec:subs}), effectively reducing $\log \langle \denoise^\ell(\z_t^{1:L}, t), \x^\ell \rangle$ to zero.
+
+\subsubsection{Training Considerations for Masked Diffusion}\label{subsubsec:improved_implementation}
+One of the key contributions of our work is a well-engineered implementation of masked diffusion models.
+Our experiments demonstrate that these improvements greatly boost performance even for methods previously thought to perform poorly, e.g., \citet{austin2021structured}. 
+Below we briefly summarize these implementation details.
+First, we find that tokenization is critical to performance.
+Small vocabularies, such as the 8k vocabulary in \citet{austin2021structured}, result in longer-range dependencies that decrease the performance of both diffusion and AR models.
+Additionally, by focusing on masked diffusion, we are able to provide a numerically stable implementation of the objective function.
+Namely, since previous formulations of discrete diffusion were constructed to accommodate a wide range of limiting distributions \citep{austin2021structured}, the objective was implemented by materializing the full transition matrices $\bar{Q}_t$ and posterior probabilities.
+In contrast, we evaluate $\KL[q(\z_s \mid \z_t, \x)||p_\theta(\z_s\mid\z_t)]$ by examining only the masked token indices rather than comparing the full true and approximate posterior distributions.
+
+
+
+
+
+
+Furthermore, we modernize the architecture for the denoising network relative to D3PM \citep{austin2021structured}. 
+In lieu of the T5 architecture used in D3PM, we use the diffusion transformer (DiT) introduced in~\citet{peebles2023scalable}, which integrates time step conditioning into a standard encoder-only transformer~\citep{vaswani2017attention} and uses rotary positional embeddings \citep{su2021roformer}.
+In addition, we implement a low-discrepancy sampler that reduces the variance of the ELBO, similar to~\citet{kingma2021variational} and draws correlated samples $t_i$ rather than performing i.i.d. sampling.
+
+
+
+
+
+
+\section{Inference and Sampling in Masked Diffusion Language Models}
+
+
+
+
+
+\subsection{Efficient Ancestral Sampling}\label{subsec:efficient_sampling}
+
+To generate a sequence of length $L$,
+the reverse diffusion process starts with the sequence $\z^{1:L}_{t=1}$ where $\z^{\ell}_{t=1} = \m$, for all $\ell \in \{1, \dots, L\}$.
+Then the subsequent latents, $\z^{1:L}_{t}$ are generated by discretizing the reverse diffusion process with some finite $T.$
+Given $\z^{1:L}_t$, we construct $\z^{1:L}_{s}$ by sampling each token $\z^\ell_{s}$ independently from the distribution $\p(\z^\ell_{s} | \z^{1:L}_{t})$ given in \Eqn{eqn:approx_posterior}.
+
+Note that in the reverse process, unmasked tokens remain unchanged.
+Thus, if no new tokens in $\z^{1:L}_{s}$ become unmasked (which can occur often in early denoising stages for large $T$), then $\z^{1:L}_{s} = \z^{1:L}_{t}$. 
+Additionally if the denoising model, $\denoise(\z^{1:L}_{t})$ is not conditioned on time,
+then we can simply draw a new sample from $\p(\z^{1:L}_{s-1/T} | \z^{1:L}_{s})$ using the previously computed and cached value $\denoise(\z^{1:L}_{t})$.
+This means we have effectively ``skipped'' over the time step $s$, saving a function call to the denoising network.
+Note that SEDD \cite{lou2023discrete} does not support this caching because the denoising network models time-dependent rates, which requires conditioning on time.
+
+
+
+
+\subsection{Semi-Autoregressive Masked Diffusion Language Models}\label{subsec:semi_ar}
+
+Our method also admits an effective semi-autoregressive (SAR) decoding method that allows the model to generate sequences of arbitrary length \cite{han2022ssd,siautoregressive,si2023semi}.
+Let $\tilde{\x}^{1:L}$ represent the output from sampling a sequence of $L$ tokens using the reverse diffusion process described above.
+To generate additional $L' < L$ tokens, we propose a generation algorithm in which the latter $L-L'$ tokens $\tilde{\x}^{L':L}$ are used as a prefix for an additional round of generation.
+Given the carry-over unmasking described in \sec{subsec:subs}, these prefix tokens will simply be copied over at each decoding step.
+The remaining tokens are generated as above with $\z^{\ell}_s \sim p_\theta(\z_s^\ell \mid \z_t^{L:L+L'})$ for all $\ell \in \{L+1, \ldots, L+L'\},$ with $\z_{t=1}^{L-L':L}$ initialized to $\tilde{\x}^{L-L':L}$ as opposed to being initialized as masked tokens $\m.$
+At the end of this process, we have produced $L + L'$ tokens $\mathrm{concat}[\tilde{\x}^{1:L}, \tilde{\x}^{L+1:L+L'}]$, where $\mathrm{concat}[\cdot]$ denotes concatenation along the sequence length dimension.
+This process can repeat indefinitely, with the prefix shifted for every new round of generation.
+
+
+
+\section{Experiments}
+
+\subsection{Masked Diffusion Language Models}
+\paragraph{Experimental Setup}
+We evaluate \algo{} as a generative model of language and as a representation model via fine-tuning on downstream tasks.
+
+For language modeling likelihood evaluation, we conduct experiments on two datasets: The One Billion Words Dataset (LM1B; \citep{chelba2014billion}) and OpenWebText (OWT; \citep{Gokaslan2019OpenWeb}).
+We use the \texttt{bert-base-uncased} tokenizer for LM1B,
+and report perplexities on the test split. Models have a context size of 128.
+For OWT, which does not have a pre-defined split, we reserve the last 100K documents as a held-out validation set and report perplexities on this set.
+We use the \texttt{GPT2} tokenizer
+\citep{radford2019language} for \owt{}.
+Models have a context size of 1,024.
+We utilize the transformer architecture from \citet{lou2023discrete}, which augments the diffusion transformer \citep{peebles2023scalable} with rotary embeddings \citep{su2021roformer}.
+\algo{} was trained for 1M or 10M steps (corresponding to 33B, 327B tokens, respectively) on LM1B and 1M steps on OWT (which corresponds to 262B tokens). The corresponding AR baseline was trained for half the number of steps to ensure similar number of tokens seen (details in~\supp{supp:sec:avg_tokens_seen}).
+Full hyperparameters are given in \supp{appendix:hyperparameters:lm}.
+On \owt{}, we train with and without time step conditioning.
+
+For representation learning, we pre-train models on the C4 dataset \citep{t5}, then fine-tune and evaluate models on the GLUE benchmark \citep{wang2018glue}.
+Models have a context size of 128.
+We use the \texttt{bert-base-uncased} tokenizer
+for the representation learning experiments.
+We utilize the MosaicBERT architecture from \citet{portes2024mosaicbert}, an extension of the original BERT architecture \citep{devlin2018bert}.
+We pre-train a bidirectional MosaicBERT using an MLM objective for 37B tokens of C4, as well as a causal variant on the same data.
+We further fine-tune MosaicBERT model using the \algo{} for 327M tokens, less than 1\% of the pre-training data.
+We provide the full hyperparameters in \supp{appendix:hyperparameters:rep}.
+
+
+
+\begin{table*}[t!]
+  \caption{Test perplexities (PPL; $\downarrow$) on LM1B. $^\dagger$Reported in \citet{he2022diffusionbert}.
+  Best diffusion value is bolded.
+  }
+  \label{tab:lm1b-ppl}
+  \centering
+  \begin{tabular}{llcc}
+    \toprule
+    & & Parameters & PPL ($\downarrow$)\\
+    \midrule
+    \multirow{2}{*}{\textit{Autoregressive}}
+        & Transformer-X Base~\citep{dai2019transformer}  & 0.46B & 23.5 \\
+        & $\text{OmniNet}_T$~\citep{tay2021omninet} & 100M & 21.5 \\
+    \midrule
+    \multirow{4}{*}{\textit{Diffusion}}
+        & BERT-Mouth~\citep{wang2019bert}$^\dagger$ & 110M & $\leq$142.89 \\
+        & D3PM (absorb)~\citep{austin2021structured}& 70M  & $\leq$76.90 \\
+        & Diffusion-LM~\citep{li2022diffusion}$^\dagger$      & 80M  & $\leq$118.62 \\
+        & DiffusionBert~\citep{he2022diffusionbert} & 110M & $\leq$63.78 \\
+        & SEDD~\citep{lou2023discrete} (33B tokens) & 110M & $\leq$ 32.79 \\
+    \specialrule{.1em}{.1em}{.1em}
+    \multirow{2}{*}{\shortstack{\textit{Autoregressive} \\\textit{(Retrained)}}}
+    & Transformer (33B tokens)  & \multirow{2}{*}{110M} & 22.32 \\
+    & Transformer (327B tokens)  &  & 20.86 \\
+    \midrule
+    \multirow{2}{*}{\shortstack{\textit{Diffusion}\\\textit{(Ours)}}}
+    & \algo{} (33B tokens) & \multirow{2}{*}{110M} & $\leq$27.04 \\
+    & \algo{} (327B tokens)  &  & $\leq$\textbf{23.00} \\
+    \bottomrule
+  \end{tabular}
+\end{table*}
+
+\paragraph{Likelihood Evaluation}
+On LM1B, \algo{} outperforms all previous diffusion methods (Table \ref{tab:lm1b-ppl}).
+Compared to the SEDD baseline reported by \citet{lou2023discrete}, trained for 33B tokens, \algo{}, which we train for the same amount, achieves a 17\% improvement on the perplexity bound.
+Finally, \algo{} gets within 14\% of an AR baseline and continues to improve with more training.
+We see the same trend for models trained on OWT, a larger dataset, shown in Table \ref{owt-ppl} -- \algo{} outperforms prior diffusion methods, closing the gap towards AR models.
+In Table \ref{tab:time-cond-abl} we find that models trained with and without time conditioning attain similar perplexities on \owt{. Additionally, Figure \ref{fig:nll_owt} demonstrates the reduced variance we achieve from our objective, when compared to previous masked diffusion models such as SEDD \citep{lou2023discrete}.
+
+
+
+
+\paragraph{Zero-Shot Likelihood Evaluation}
+\begin{wraptable}{r}{4cm}
+  \vspace{-1em}
+  \caption{Test perplexities (PPL; $\downarrow$) on \owt{} for models trained for 262B tokens. $^\dagger$ denotes retrained models.}
+  \label{owt-ppl}
+  \centering
+  \begin{tabular}{ll}
+    \toprule
+    & PPL ($\downarrow$) \\
+    \midrule
+    AR$^\dagger$ & 17.54 \\
+    \midrule
+    SEDD$^\dagger$  & $\leq$24.10 \\
+    \algo{} (Ours) & $\leq$\bf{23.21} \\
+    \bottomrule
+  \end{tabular}
+  \vspace{-1em}
+\end{wraptable}
+We also explore models' ability to generalize by taking models trained on OWT and evaluating how well they model unseen datasets.
+We compare the perplexities of our \algo{} with SEDD \citep{austin2021structured} and an AR Transformer language model.
+Our zero-shot datasets include the validation splits of Penn Tree Bank (PTB; \citep{marcus1993building}), Wikitext \citep{merity2016pointer}, LM1B, Lambada \citep{paperno-EtAl:2016:P16-1}, AG News \citep{Zhang2015CharacterlevelCN}, and Scientific Papers (Pubmed and Arxiv subsets; \citep{Cohan_2018}).
+Full experimental details are available in \supp{appendix:hyperparameters:lm}.
+
+\algo{} consistently outperforms the SEDD diffusion parameterization.
+In some cases, e.g., for Lambada and Scientific Papers, \algo{} attains better perplexity than AR.
+We hypothesize that these datasets are farther from OWT, and that diffusion models may be more robust to out-of-domain evaluation due to the unmasking-based objective.
+
+\begin{table*}[t!]
+\caption{Zero-shot perplexities ($\downarrow$) of models trained for 524B tokens on \owt{}.
+All perplexities for diffusion models are upper bounds.
+}
+\label{zeroshot-ppl}
+\centering
+\begin{tabular}{lccccccc}
+\toprule
+& PTB & Wikitext & LM1B & Lambada  & AG News & Pubmed & Arxiv\\
+\midrule
+AR (Retrained) &\textbf{82.05} & \textbf{25.75} & \textbf{51.25} & 51.28 & \textbf{52.09} & 49.01 & 41.73\\
+\midrule
+SEDD (Retrained) & 100.09 & 34.28 & 68.20& 49.86 & 62.09 & 44.53 & 38.48\\
+\algo{} (Ours)  & 95.26 & 32.83 & 67.01& \textbf{47.52} & 61.15 & \textbf{41.89} & \textbf{37.37}\\
+
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\begin{table*}[t!]
+\caption{GLUE evaluation results.
+Evaluation measures ($\uparrow$) are F1 score for QQP and MRPC, Spearman correlations for STS-B, and accuracy for the rest.
+For MNLI, we report match/mismatch accuracies.
+}
+  \label{tbl:glue}
+\centering
+\footnotesize
+\begin{tabular}{lccccccccc}
+\toprule
+& \shortstack{MNLI\\(m/mm)} & QQP & QNLI & SST-2  & COLA & STS-B & MRPC & RTE & Avg\\
+\midrule
+AR & 80.94/80.78 & 86.98 & 86.16 & 90.14 & 33.43  &84.32  & 83.88 &47.29  & 74.88\\
+BERT & 84.43/85.35 & 88.41 & \bf{90.46} & \bf{92.20} & 54.81 & \bf{88.41} & 89.16 & 61.37 & 81.62\\
++\algo{}-FT  & \bf{84.76/85.07} & \bf{88.49} & 90.30 & \bf{92.20} & \bf{57.69} & 87.48 & \bf{90.53} & \bf{62.09} & \bf{82.06}\\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\paragraph{Downstream Task Evaluation}
+We find that BERT fine-tuned with \algo{} to be a generative model results in strong perplexities while preserving performance on downstream tasks.
+On the C4 validation set, the AR model attains perplexity (PPL) of 22, the pre-trained BERT attains a PPL upper bound of 78 (evaluated using the \algo{} variational bound), and BERT + \algo{}-FT attains a PPL upper bound of 35.
+In \tab{tbl:glue}, we further find that BERT + \algo{} fine-tuning has no degradation in downstream GLUE performance compared to the BERT initialization.
+While the perplexity of our method is higher than the AR baseline, the downstream task performance is significantly better.
+
+\paragraph{Semi-Autoregressive Modeling}
+\begin{wraptable}{r}{6.5cm}
+  \vspace{-1.35em}
+  \caption{Semi-AR generative perplexity (Gen. PPL; $\downarrow)$ for sequences of 2048 tokens.
+  }
+  \label{tab:semi-ar}
+  \centering
+  \begin{tabular}{lcc}
+    \toprule
+    & Gen. PPL ($\downarrow$) & Sec/Seq ($\downarrow$) \\
+    \midrule
+    SSD-LM & 35.43 & 2473.9 \\
+    \algo{} (Ours) & \bf{27.18} & \bf{89.3}\\
+    \bottomrule
+  \end{tabular}
+\end{wraptable}
+To test the SAR decoding algorithm presented in \sec{subsec:semi_ar}, we compare to SSD-LM \citep{han2022ssd}
+a diffusion model that was designed to generate blocks of text autoregressively.
+We generate 200 sequences of length 2048 tokens on a single \texttt{3090} GPU and evaluate generative perplexity under a pre-trained GPT-2 \citep{radford2019language} model.
+The SSD-LM sequences are generated using blocks of 25 tokens (as implemented in their pre-trained model) and the \algo{} sequences are generated using $L' = 512$.
+In~\tab{tab:semi-ar}, we find that in addition to achieving better generative perplexity, \algo{} enables $\sim$25-30x faster SAR decoding relative to SSD-LM.
+
+
+
+\subsection{Masked Diffusion DNA Models}
+We also explore applications to the generative modeling of biological sequences \citep{deshpande2022deep,rastogi2023semi} using a state space model (SSM) backbone \citep{gu2021efficiently}.
+Namely, we build on the recently-proposed Caduceus DNA language model \citep{schiff2024caduceus}, which uses as a backbone the data-dependent SSM Mamba block \citep{gu2023mamba}.
+
+\paragraph{Experimental Setup}
+
+We pre-train the encoder-only Caduceus~\citep{schiff2024caduceus}, which is an MLM, on the HG38 human reference genome~\citep{hg38} and perform fine-tuning using our diffusion parameterization.
+We use a context length of 1024 tokens and follow~\citet{schiff2024caduceus} for the experimental setup,
+other than learning rate which was reduced to 1e-3.
+See \supp{apepndix:diffusion-dna-setup} for full experimental details.
+We assess both generative performance using perplexity and downstream performance on Genomics Benchmarks~\citep{grevsova2023genomic} across language diffusion paradigms and AR models.
+
+
+
+
+\paragraph{Generative Performance}
+We fine-tune the Caduceus MLM across diffusion parameterizations and compare perplexities against AR models. We report perplexity values in Table \ref{tab:genome-ppl}.
+\algo{} outperforms all other diffusion language modeling schemes.
+\begin{table}[t!]
+  \caption{Test perplexities (PPL; $\downarrow$) of generative fine-tuning of the Caduceus MLM \citep{schiff2024caduceus} on the HG38 reference genome.
+  Best diffusion model values are bolded.
+  Error bars indicate the difference between the maximum and minimum values across 5 random seeds used for fine-tuning.}
+  \label{tab:genome-ppl}
+  \centering
+  \begin{tabular}{llll}
+    \toprule
+    && Params & PPL ($\downarrow$) \\
+    \midrule
+    \multirow{2}{*}{\textit{Autoregressive (Retrained)}}& Mamba & 465K & 3.067 $\pm$ .010 \\
+    & HyenaDNA & 433K & 3.153 $\pm$ .001\\
+    \midrule 
+    \multirow{2}{*}{\textit{Diffusion (Retrained)}}& Plaid & 507K & $\leq$ 3.240 $\pm$ .005 \\
+    & SEDD & 467K & $ \leq$ 3.216 $\pm$ .003 \\
+    
+    \midrule
+    \textit{Diffusion (Ours)} & \algo{}   & 467K & $\leq$ \textbf{3.199} $\pm$ .010 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+
+\paragraph{Downstream Task Fine-tuning}
+We perform downstream evaluation with the Genomics Benchmarks~\citep{grevsova2023genomic}, a recently proposed benchmark with eight regulatory element classification tasks.
+As shown in Table \ref{tab:genomic_benchmarks}, our generative fine-tuning paradigm preserves or improves upon downstream performance from MLM pre-training.
+ Absorbing-state diffusion methods outperform Plaid across tasks except for the simplest task Human vs. Worm, where all methods have roughly the same performance.
+ For tasks where the input is a biased subsample of the full genome, we observe that the correlation between perplexity and downstream performance is weaker; see~\supp{apepndix:diffusion-dna-setup}.
+
+
+
+\begin{table*}[t!]
+\centering
+\caption{Genomic Benchmarks. Top-1 accuracy ($\uparrow$) across 5-fold cross-validation (CV) for a pre-trained AR Mamba, and a pre-trained Caduceus model fine-tuned with different diffusion parameterizations.
+The best values per task are bolded and the second best are italicized.
+Error bars indicate the difference between the maximum and minimum values across 5 random seeds used for CV.}
+\label{tab:genomic_benchmarks}
+\begin{center}
+\begin{scriptsize}
+\begin{tabular}{lccccc}
+\toprule
+\begin{tabular}{@{}l@{}}Model\\ Fine-Tuning Objective \\ (Parameter Count) \end{tabular}
+& \begin{tabular}{@{}c@{}}Mamba\\ AR \\ (465K) \end{tabular} 
+& \begin{tabular}{@{}c@{}}Caduceus\\ MLM \\ (467K)\end{tabular}
+& \begin{tabular}{@{}c@{}}Caduceus\\ Plaid\\ (507k) \end{tabular} 
+& \begin{tabular}{@{}c@{}}Caduceus\\ SEDD \\ (467k) \end{tabular}
+& \begin{tabular}{@{}c@{}}Caduceus\\ \algo{} (ours) \\ (467k) \end{tabular}
+
+\\
+\midrule
+Mouse Enhancers         
+&  $0.763$ \tiny\{$\pm 0.008$\}  %
+&  $\bf0.810$ \tiny\{$\pm 0.016 $\} %
+&  $0.745$ \tiny\{$\pm 0.079$\}  %
+&  $0.784$ \tiny\{$\pm 0.058$\} %
+&  $\it0.795$ \tiny\{$\pm 0.029$\} %
+\\
+Coding vs. Intergenomic 
+&  $0.897$ \tiny\{$\pm 0.004$\} %
+&  $\bf0.913$ \tiny\{$\pm 0.003$\} %
+&  $\it0.908$ \tiny\{$\pm 0.003$\} %
+&  $\bf0.913$ \tiny\{$\pm 0.005$\} %
+&  $\bf0.913$ \tiny\{$\pm 0.003$\} %
+\\
+Human vs. Worm          
+&  $0.967$ \tiny\{$\pm 0.002$\} %
+&  $\it0.970$ \tiny\{$\pm 0.002$\} %
+&  $\bf0.971$ \tiny\{$\pm 0.001$\} %
+&  $\it0.970$ \tiny\{$\pm 0.003$\} %
+&  $\it0.970$ \tiny\{$\pm 0.003$\} %
+\\
+Human Enhancers Cohn    
+&  $0.734$ \tiny\{$\pm 0.027$\} %
+&  $0.737$ \tiny\{$\pm 0.001$\} %
+&  $\it0.743$ \tiny\{$\pm 0.010$\} %
+&  $\bf0.746$ \tiny\{$\pm 0.015$\} %
+&  $\it0.743$ \tiny\{$\pm 0.016$\} %
+\\
+Human Enhancer Ensembl  
+&  $0.856$ \tiny\{$\pm 0.003$\} %
+&  $\bf0.907$ \tiny\{$\pm 0.000$\} %
+&  $0.885$ \tiny\{$\pm 0.003$\} %
+&  $\it0.905$ \tiny\{$\pm 0.006$\} %
+&  $0.899$ \tiny\{$\pm 0.004$\} %
+\\
+Human Regulatory        
+&  $0.861$ \tiny\{$\pm 0.008$\} %
+&  $\bf0.874$ \tiny\{$\pm 0.003$\} %
+&  $\it0.868$ \tiny\{$\pm 0.010$\} %
+&  $0.828$ \tiny\{$\pm 0.037$\} %
+&  $\it0.868$ \tiny\{$\pm 0.004$\} %
+\\
+Human OCR Ensembl       
+&  $0.806$ \tiny\{$\pm 0.005$\} %
+&  $\it0.821$ \tiny\{$\pm 0.000$\} %
+&  $0.820$ \tiny\{$\pm 0.004$\} %
+&  $0.816$ \tiny\{$\pm 0.008$\} %
+&  $\bf0.823$ \tiny\{$\pm 0.008$\} %
+\\
+Human NonTATA Promoters 
+&  $0.926$ \tiny\{$\pm 0.008$\} %
+&  $\it0.935$ \tiny\{$\pm 0.014$\} %
+&  $\it0.935$ \tiny\{$\pm 0l007$\} %
+&  $\it0.935$ \tiny\{$\pm 0.014$\} %
+&  $\bf0.940$ \tiny\{$\pm 0.007$\} %
+\\
+
+\bottomrule
+\end{tabular}
+\end{scriptsize}
+\end{center}
+\vskip -0.1in
+\end{table*}
+
+
+
+\subsection{Ablation Analysis}
+\begin{wraptable}{r}{6.5cm}
+  \vspace{-0.45cm}
+  \caption{Test perplexities (PPL; $\downarrow$) for \algo{} ablations on LM1B. For the discrete-time models, we use $T=1000$. Standard deviation is measured over 5 seeds during evaluation.}
+  \centering
+  \begin{tabular}{lc}
+    \toprule
+    & PPL ($\leq$) \\
+    \midrule
+    \algo{}~\Eqn{supp:eqn:elbo_mdlm_cont} & $\mathbf{27.04} \pm .01$ \\
+    ~~~w/o continuous time~\Eqn{supp:eqn:elbo_mdlm_discrete} & $27.19 \pm .07$ \\
+    ~~~~~~\& w/o carry-over~\Eqn{subsec:eqn:d3pm_elbo_rb2} & $28.56 \pm .15$ \\
+    ~~~~~~~~~\& w/o zero masking~\Eqn{supp:eqn:elbo_d3pm} & $28.51 \pm .15$ \\
+    \bottomrule
+  \end{tabular}
+  \label{tab:lm1b-ablation}
+\end{wraptable}
+In \tab{tab:lm1b-ablation}, we can see the effect of our streamlined masked diffusion implementation.
+The improvements described in \sec{subsubsec:improved_implementation} allow us to greatly reduce perplexity of previously discounted models, such as D3PM
+(see the bottom row of this table, which is mathematically equivalent to the D3PM formulation).
+While most works assumed that D3PM achieves mediocre log-likelihoods, we show that is incorrect: our re-implementation almost matches state-of-the-art score-based methods.
+This introduces a new strong baseline that opens new research opportunities.
+Additionally, in~\tab{tab:lm1b-ablation}, we ablate different components of \algo{}.
+We observe that the perplexity for \algo{} trained with a discrete $T=1000$ marginally worsens by 0.1 compared to \algo{} trained in continuous time.
+Additionally, removing the ``carry over'' operation from the \method{} parameterization increases the perplexity by 1.5 points.
+However, further removing the ``zero masking'' operation does not lead to any meaningful change in perplexity. 
+We provide further ablations for the continuous time formulation in the Appendix, showing in ~\tab{supp:fig:subs-ablation} that for a pre-trained model, at inference, increasing $T$ yields better likelihoods.
+
+
+
+
+\section{Related Work}\label{sec:discussion}
+\textbf{Comparison to D3PM}~
+Masked diffusion is a strict subset of D3PM \citep{austin2021structured}; setting $Q_{t|s} = \ats\bfI + (1-\ats) \vone {\m^\top}$ in their framework yields our forward diffusion.
+We improve over D3PM in three ways: (1) we adopt the SUBS parameterization; (2) this allows us to derive a simplified objective that analytically simplifies certain expectations to zero; (3) we adopt well-engineered training recipes that improve performance. 
+Both (1) and (2) are possible because we focus on masking instead of developing a general discrete diffusion framework.
+Surprisingly, (3) has the largest contribution to performance.
+
+\textbf{Comparison to CTMC}~
+Most implementations of diffusion work best in continuous time. However, extending D3PM in this way requires computing the limit of the product of an infinite number of matrices $Q_T \cdot Q_{T-1} \cdots Q_t$ as $T \to \infty$, which requires advanced CTMC theory \citep{campbell2022continuous}. Our work describes simple continuous-time formulations for the most common noise processes (e.g., masking and uniform $\prior$), thus helping make an important part of the literature more accessible.
+In~\supp{app:sec:score_matching}, we show that our results are compatible with CTMC, using the rate forward matrix $R_t = \frac{\dat}{\at} (\bfI - \vone \m^\top)$ and the reverse rate
+$\Rrevt(\y', \y)$ for the transition
+$\y \to \y'$, where
+$\y, \y' \in \onehotset$:
+{
+\begin{align}
+    \Rrevt(\y', \y) = - \frac{\dat}{1 - \at} [\y']^\top [\denoise (\y, t) - \m] \langle \y, \m \rangle
+\end{align}
+\vspace{-1em}
+}
+
+\textbf{Comparison to Score Estimation}~
+Score-based approaches to diffusion \citep{song2019generative} extend to discrete states, although they typically further build upon advanced CTMC theory.
+In particular, SEDD \citep{lou2023discrete} optimizes an ELBO\footnote{
+\citet{lou2023discrete} mention that their ELBO can be derived from \citet{benton2022denoising, Hanson2007AppliedSP} but do not provide an explicit derivation. To address this, we present a rigorous derivation in~\supp{app:subsec:sedd_nelbo} using CTMC theory. 
+}
+that is a function of the score model, obtaining state-of-the-art log-likelihoods among diffusion models. Our approach, however, is much simpler and does not require advanced theory. Furthermore, we can extract the score for \algo{}~\Eqn{eqn:subs_score_vectorized}, as demonstrated in~\supp{app:subsec:subs_score}, making it compatible with various techniques designed for score-based algorithms, such as samplers \citep{campbell2022continuous}, score parameterization \citep{lou2023discrete}, efficient designs of the denoising network \citep{sun2022score}, guidance techniques, and more.
+
+\textbf{Comparison to BERT}~
+Our work provides a principled way of making BERT generative when trained with randomized masking rates. Previous work on generating from BERT used Gibbs sampling or ad-hoc methods \citep{maskpredict,pmlm,wang2019bert}. The connection between BERT and diffusion was first made by \citet{austin2021structured}: their objective effectively involves unmasking. \citet{he2022diffusionbert} additionally starts training from a pretrained BERT. However, both works use an objective that is similar to (\ref{eqn:unsimplified_diffusion_loss}), which is less numerically stable than our objective (see Section \ref{subsubsec:improved_implementation}).
+\citet{austin2021structured} mention in their appendix that their ELBO simplifies to a weighted masking (MLM) loss similar to (\ref{eqn:simplified_diffusion_loss}), but it uses a more complex formula for the weights and is limited to the discrete time setting unlike our work. Furthermore, they do not train with that objective. Our work derives a simpler expression for the average of MLM losses, implements it, and obtains better likelihoods.
+
+\textbf{Comparision to Latent Diffusion LMs}~In contrast to this work, which defines diffusion over discrete structures, Plaid \citep{gulrajani2024plaid} and Diffusion LM \citep{li2022diffusion} define a Gaussian diffusion process over word embeddings. \citet{zhang2024language} and \citet{hu2024flow} extend this approach to flow matching over word embeddings, enabling the design of faster samplers. Discrete Flow Matching (DFM) \citep{campbell2024generative} applies flow matching to discrete structures, using a cross-entropy loss as their training objective: $- \mathbb{E}_{q,t} \log \p(\x^{1:L} | \z_t^{1:L})$.
+Similar to \citet{chang2022maskgit}, DFM’s objective, while effective, is not weighted to serve as a proper ELBO. In MDLM, however, we derive a tight, principled lower bound on the log-likelihood.
+
+\textbf{Concurrent Works}~
+Concurrent to our work, \citet{shi2024simplified} and \citet{ou2024absorbingdiscretediffusionsecretly} derive a similar simplified objective for masked diffusion processes.
+While \citet{ou2024absorbingdiscretediffusionsecretly} start from a score matching perspective, we tackle this problem from a variational lens similar to \citet{shi2024simplified}.
+Similar to \citet{ou2024absorbingdiscretediffusionsecretly}, we formulate efficient samplers in Section \ref{subsec:efficient_sampling} by leveraging a time-independent denoising network.
+
+A key differentiation between our work and that of \citet{shi2024simplified, ou2024absorbingdiscretediffusionsecretly} is the semi-autoregressive decoding method we present in Section \ref{subsec:semi_ar}.
+While \citep{shi2024simplified, ou2024absorbingdiscretediffusionsecretly} are restricted to sample sequences of a fixed length, we propose samplers to generate arbitrary lengths of text like a traditional language model.
+Furthermore, we establish the connection between our simplified objective and the masked language modeling (MLM) objective.
+As a result, we endow BERT-style models with principled generation capabilities while maintaining representation learning capabilities.
+Whereas \citep{shi2024simplified, ou2024absorbingdiscretediffusionsecretly} only evaluate on NLP datasets, we show that masked diffusion is also effective in modeling biological sequences.
+
+
+
+
+
+
+\section{Conclusion}
+In this work, we explore masked diffusion. 
+With a well-engineered implementation that supports a simple variational objective, we attain state-of-the-art diffusion perplexities on language benchmarks and demonstrate how to efficiently convert BERT-style encoders into generative models. Given we are working on language modeling, we carry any of the inherent risks and opportunities that come with this line of research.
+
+\section*{Acknowledgments and Disclosure of Funding}
+This work was partially funded by the National Science Foundation under awards DGE-1922551,
+CAREER awards 2046760 and 2145577,  and by the National Institute of Health under award MIRA
+R35GM151243. Marianne Arriola is supported by a NSF Graduate Research Fellowship under award DGE-2139899 and a Hopper-Dean/Bowers CIS Deans Excellence Fellowship.
+
+\bibliography{refs}
+\bibliographystyle{neurips_2024}
+
+\newpage
+\appendix
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+\setcounter{tocdepth}{2}
+\tableofcontents
+\allowdisplaybreaks
+\begin{appendices}
+
+\section{Discrete time ELBO}\label{app:sec:d3pm}
+This section is organized as follows: First, we derive the expressions for the true posterior and the approximate posterior as outlined in~\supp{supp:subsec:d3pm_generic}. We then simplify these expressions specifically for the case of absorbing state diffusion in~\supp{supp:subsec:d3pm_absorbing}. Finally, we derive the expression for the ELBO for absorbing state diffusion in~\supp{supp:subsec:d3pm_absorbing_elbo}.
+
+\subsection{Generic case}\label{supp:subsec:d3pm_generic}
+Given the state transition matrix $\Qt$, prior \prior{}, and the latent variables $\z_s$ and $\z_t$, where $s < t$, 
+let
+\begin{align}\label{eqn:d3pm_Q_discrete_old}
+    \Qts = \ats \bfI+ (1 - \ats)\vone \prior^\top.
+\end{align}
+\subsubsection{\texorpdfstring{$q(\z_t | \z_s)$}{Lg}}
+Thus, the marginals in~\Eqn{eq:d3pm_maginal} correspond to the following forward process:
+\begin{align}\label{supp:eqn:one_step_forward}
+    q(\z_t | \z_s)
+    & = \cat(\z_t; \Qts^\top\z_s \nonumber) & \\
+    & = \cat(\z_t; [\ats \bfI+ (1 - \ats)\vone \prior^\top]^\top\z_s) \nonumber & \\
+    & = \cat(\z_t; \ats \z_s + (1 - \ats)\prior \vone^\top\z_s) & \text{\footnotesize $\because \vone^\top \z_s = 1$}\nonumber \\
+    & = \cat(\z_t; \ats \z_s + (1 - \ats)\prior).
+\end{align}
+The above equation indicates that during each diffusion step from $s \to t$,
+a fraction $(1 - \ats)$ of the probability mass is transferred to the prior distribution $\prior{}$. 
+\subsubsection{\texorpdfstring{$q(\z_s | \z_t, \x)$}{Lg}}
+\citet{austin2021structured} show that the posterior corresponding to~\Eqn{supp:eqn:one_step_forward} is given as follows:
+\begin{align}
+    q(\z_s | \z_t, \x) = \cat \left(
+        \z_s; \frac{\Qts \z_t \odot \Qs^\top\x}{
+            \z_t^\top \Qt^\top \x} \right), \label{eqn:d3pm_q_st_discrete_old}
+\end{align}
+which we simplify to the following:
+\begin{align}\label{supp:eqn:d3pm_posterior_generic}
+    & q(\z_s | \z_t, \x) & \nonumber \\
+    & = \cat \left(
+        \z_s; \frac{[\ats \bfI+ (1 - \ats)\vone \prior^\top] \z_t \odot [\as \bfI+ (1 - \as)\vone \prior^\top]^\top\x}{
+            \z_t^\top [\at \bfI+ (1 - \at)\vone \prior^\top]^\top \x} \right) & \nonumber \\
+    & = \cat \left(
+        \z_s; \frac{[\ats \z_t + (1 - \ats)\vone \prior^\top \z_t]  \odot [\as \x + (1 - \as) \prior]}{
+             \z_t^\top [\at \x + (1 - \at)\prior\vone^\top\x] } \right) & \nonumber \\
+    & = \cat \left(
+        \z_s; \frac{[\ats \z_t + (1 - \ats)\vone \prior^\top \z_t]  \odot [\as \x + (1 - \as) \prior]}{
+             \at \z_t^\top \x  + (1 - \at)\z_t^\top\prior} \right). & \text{\footnotesize $\because \vone^\top\x = 1$}
+\end{align}
+
+\subsubsection{\texorpdfstring{$\p(\z_s | \z_t)$}{Lg}}
+\citet{austin2021structured} approximate the reverse process in the following manner: 
+\begin{align}\label{supp:eqn:d3pm_p_st_approx_old}
+    \p(\z_s | \z_t) = q(\z_s | \z_t, \x=\xapprox) =
+     \cat \left(
+        \z_s; \frac{\Qts \z_t \odot \Qs^\top \xapprox}{
+            \z_t^\top \Qt^\top \xapprox} \right).
+\end{align}
+where $\xapprox: \onehotset \times [0, 1] \rightarrow \Delta^{K}$ is an approximation for $\x$.
+
+\subsection{Absorbing state}\label{supp:subsec:d3pm_absorbing}
+For the absorbing state diffusion process we have $\prior{} = \m$.
+
+\subsubsection{\texorpdfstring{$q(\z_s | \z_t, \x)$}{Lg}}
+Since, $\z_t \in \{\x, \m\}$, takes only 2 values we consider the separate cases: $\z_t = \x$ and $\z_t=\m$.
+
+\paragraph{Case 1.} Consider the case \textbf{$\z_t = \x$} i.e. $\z_t$ is unmasked. 
+From~\Eqn{supp:eqn:d3pm_posterior_generic}, we have the following:
+\begin{align}
+    & q(\z_s | \z_t=\x, \x) \nonumber \\
+    & = \cat \left(
+        \z_s; \frac{[\ats \x + (1 - \ats)\vone \m^\top \x]  \odot [\as \x + (1 - \as) \m]}{
+             \at \x^\top \x  + (1 - \at)\x^\top\m} \right) & \nonumber \\
+    & = \cat \left(
+        \z_s; \frac{[\ats \x ]  \odot [\as \x + (1 - \as) \m]}{
+             \at} \right) & \text{\footnotesize $\because \x^\top\m = 0$} \nonumber \\
+    & = \cat \left(
+        \z_s; \frac{\at \x}{\at} \right) & \text{\footnotesize $\because \x\odot\m = \mathbf{0}$ and $\at = \ats \as$} \nonumber \\
+    & = \cat \left(\z_s; \x \right) & \text{\footnotesize $\because \at = \ats \as$}
+\end{align}
+Thus, we have the following:
+\begin{align}
+    q(\z_s | \z_t=\x, \x) = \cat (\z_s; \x).
+\end{align}
+
+\paragraph{Case 2.}
+Consider the case \textbf{$\z_t = \m$}. By substituting $\z_t = \m$ and $\prior = \m$ in \Eqn{supp:eqn:d3pm_posterior_generic}, 
+$q(\z_s | \z_t, \x)$ simplifies to the following:
+\begin{align}\label{supp:eqn:d3pm_posterior_masked}
+    q(\z_s | \z_t=\m, \x)
+    & = \cat \left(\frac{(\ats \m + (1 - \ats)\vone)  \odot (\as \x + (1 - \as)\m)}{(1 - \at)} \right) \nonumber \\
+    & = \cat \left(\frac{(\ats(1 - \as)\m + (1 - \ats)(1 - \as)\m + (\as - \at) \x)}{(1 - \at)} \right) \nonumber \\
+    & = \cat \left( \z_s; \frac{
+        (1 - \as)\m + (\as - \at)\x}{1 - \at}\right)
+\end{align}
+Note that the above categorical distribution is non-zero for $\z_s \in \{\x, \m\}$ and zero for every other value. The non-zero values are specified as follows:
+\begin{align}
+    q(\z_s = \x| \z_t = \m, \x) = \frac{
+        \as - \at}{1 - \at}\label{eqn:d3pm_q_st_unmasked_old} \\
+    q(\z_s = \m| \z_t = \m, \x) = \frac{1 - \as}{1 - \at} \label{eqn:d3pm_q_st_masked_old}
+\end{align}
+Combining Cases 1 and 2, we get:
+\begin{align}\label{eqn:q_st_discrete}
+    q(\z_s | \z_t, \x) =
+    \begin{cases}
+        \cat (\z_s; \z_t) & \z_t \neq \m, \\
+        \cat \left( \z_s; \frac{
+        (1 - \as)\m + (\as - \at)\x}{1 - \at}\right) & \z_t=\m. 
+    \end{cases}
+\end{align}
+
+
+\subsubsection{\texorpdfstring{$\p(\z_s | \z_t)$}{Lg}}\label{appsubsubsec:simplified_p}
+For the absorbing state diffusion process with $\prior = \m$, we want to simplify the \Eqn{supp:eqn:d3pm_p_st_approx_old}. For this reason, we consider 2 cases: first, when $\z_t \neq \m$ (\textbf{case 1}), second, when $\z_t \neq \m$ (\textbf{case 2}).
+
+\paragraph{Case 1.} Consider the case when $\z_t \neq \m$. \Eqn{supp:eqn:d3pm_p_st_approx_old} simplifies to the following:
+\begin{align}\label{eqn:p_st_discrete_old_case_1}
+    \p(\z_s | \z_t \neq \m)
+    & = \cat \left(\z_s; \frac{\Qts \z_t \odot \Qs^\top \xapprox}{
+            \z_t^\top \Qt^\top \xapprox} \right)  \nonumber \\
+    & = \cat \left(\z_s; \frac{\Qts \z_t \odot \Qs^\top \xapprox}{
+            [\Qt \z_t] ^ \top \xapprox} \right) \nonumber \\
+    & = \cat \left(\z_s; 
+        \frac{[\ats \z_t] \odot [\as \bfI+ (1 - \as) \m \vone^\top] \xapprox}{
+            [\at \z_t] ^ \top \xapprox} \right) \nonumber \\
+    & = \cat \left(\z_s; 
+        \frac{[\ats \z_t] \odot [\as \xapprox + (1 - \as) \m  \langle \vone, \xapprox \rangle] }{
+            \at \langle \z_t, \xapprox \rangle } \right)  \nonumber \\
+    & \text{\footnotesize since $\langle \vone, \xapprox \rangle = 1$, we have the following:} \nonumber \\
+    & = \cat \left(\z_s; 
+        \frac{[\ats \z_t] \odot [\as \xapprox + (1 - \as) \m ] }{
+            \at \langle \z_t, \xapprox \rangle  } \right) \nonumber \\
+    & \text{\footnotesize since $\z_t \odot \m = \mathbf{0}$, we have the following:} \nonumber \\
+    & = \cat \left(\z_s; 
+        \frac{\at \z_t \odot \xapprox}{
+            \at \langle \z_t, \xapprox \rangle } \right) \nonumber \\
+    & = \cat \left(\z_s; \z_t \right) 
+\end{align}
+
+\paragraph{Case 2.} Consider the case when $\z_t = \m$. \Eqn{supp:eqn:d3pm_p_st_approx_old} simplifies to the following:
+\begin{align}\label{eqn:p_st_discrete_old}
+    \p(\z_s | \z_t = \m)
+    & = \cat \left(\z_s; \frac{\Qts \m \odot \Qs^\top \xapprox}{
+            \m^\top \Qt^\top \xapprox} \right) \nonumber \\
+    & = \cat \left(\z_s; \frac{\Qts \m \odot \Qs^\top \xapprox}{
+            [\Qt \m] ^ \top \xapprox} \right) \nonumber \\
+    & = \cat \left(\z_s; 
+        \frac{[\ats \m + (1 - \ats)\vone] \odot [\as \bfI+ (1 - \as) \m \vone^\top] \xapprox}{
+            [\at \m + (1 - \at)\vone] ^ \top \xapprox} \right) \nonumber \\
+    & = \cat \left(\z_s; 
+        \frac{[\ats \m + (1 - \ats)\vone] \odot [\as \xapprox + (1 - \as) \m  \langle \vone, \xapprox \rangle] }{
+            \at \langle \m, \xapprox \rangle + (1 - \at) \langle \vone, \xapprox \rangle} \right) \nonumber \\
+    & = \cat \left(\z_s; 
+        \frac{[\ats \m + (1 - \ats)\vone] \odot [\as \xapprox + (1 - \as) \m ] }{\at \xapproxm + (1 - \at)} \right) \nonumber \\
+    & = \cat \left(\z_s; 
+        \frac{\at \m \odot \xapprox + (\as - \at)\xapprox + (1 - \as) \m }{\at \xapproxm + (1 - \at)} \right)
+\end{align}
+Note that the above categorical distribution, we can obtain the values for $\p(\z_s = \x| \z_t = \m)$ and $\p(\z_s = \m| \z_t = \m)$ which are as follows:
+\begin{align}
+    & \p(\z_s = \x| \z_t = \m) = \frac{
+        (\as - \at) \xapproxum}{\at \xapproxm + (1 - \at)}\label{subsec:eqn:d3pm_p_st_unmasked_old} \\
+    & \p(\z_s = \m| \z_t = \m) = \frac{
+        \as \xapproxm + (1 - \as)}{\at \xapproxm + (1 - \at)} \label{eqn:d3pm_p_st_masked_old}
+\end{align}
+As a sanity check, we can verify that \Eqn{subsec:eqn:d3pm_p_st_unmasked_old} reduces to \Eqn{eqn:d3pm_q_st_unmasked_old}, and \Eqn{eqn:d3pm_p_st_masked_old} reduces to \Eqn{eqn:d3pm_q_st_masked_old} if our denoising network can reconstruct $\x$ perfectly, i.e., $\xapprox = \x$.
+
+Combining~\Eqn{eqn:p_st_discrete_old_case_1} and~\Eqn{eqn:p_st_discrete_old}, we get the following expression for the reverse process parameterization:
+\begin{align}\label{eqn:d3pm_approximate_posterior}
+    \p(\z_s| \z_t) =
+    \begin{cases}
+    \cat \left(\z_s; \z_t \right) & \text{\footnotesize $\z_t \neq \m$}, \\
+    \cat \left(\z_s; 
+        \frac{\at \m \odot \xapprox + (\as - \at)\xapprox + (1 - \as) \m }{\at \xapproxm + (1 - \at)} \right) & \text{\footnotesize $\z_t = \m$.}
+    \end{cases}
+\end{align}
+
+\subsubsection{Diffusion Loss}\label{supp:subsec:d3pm_absorbing_elbo}
+For a given $T$, Let $\lossdiffdisc = \mathbb{E}_{t \in \{\frac{1}{T}, \frac{2}{T}, \ldots, 1\}}\mathbb{E}_{q(\z_t | \x)} T 
+\kl(q(\z_s | \z_t, \x) \| \p(\z_s | \z_t))$ denote the diffusion loss.
+We break down the computation of $\kl(q(\z_s | \z_t, \x) \| \p(\z_s | \z_t))$ into 2 cases: $\z_t = \x$ (\textbf{case 1}) and $\z_t = \m$ (\textbf{case 2}).
+
+\paragraph{Case 1:} consider the case $\z_t = \x$.
+Let's simplify $\kl(q(\z_s | \z_t=\x, \x) \| \p(\z_s | \z_t=\x))$.
+\begin{align}\label{eqn:d3pm_kl_0_old}
+    & \kl(q(\z_s | \z_t = \x, \x) \| \p(\z_s | \z_t = \x)) & \nonumber \\
+    & = \kl(\z_t \| \z_t) & \text{\footnotesize From \Eqn{eqn:q_st_discrete} and \Eqn{eqn:p_st_discrete_old_case_1}} & \nonumber \\
+    & = 0
+\end{align}
+
+
+
+
+\paragraph{Case 2:} Consider the case $\z_t = \m$.
+Let's simplify $\kl(q(\z_s | \z_t=\m, \x) \| \p(\z_s | \z_t=\m))$.
+\begin{align}\label{eqn:d3pm_kl_discrete_old}
+    & \kl(q(\z_s | \z_t=\m, \x) \| \p(\z_s | \z_t=\m)) \nonumber \\
+    & = \sum_{\z_s}q(\z_s | \z_t=\m, \x) \log
+         \frac{q(\z_s | \z_t=\m, \x)}{\p(\z_s | \z_t=\m)} \nonumber \\
+    & = \sum_{\z_s \in \{\x, \m\}}q(\z_s | \z_t=\m, \x) \log
+         \frac{q(\z_s | \z_t=\m, \x)}{\p(\z_s | \z_t=\m)} \nonumber \\
+    & = \underbrace{
+            q(\z_s = \x | \z_t=\m, \x) \log \frac{q(\z_s = \x | \z_t=\m, \x)}{\p(\z_s = \x | \z_t=\m)}}_{\text{
+            Simplify using \Eqn{eqn:d3pm_q_st_unmasked_old} and \Eqn{subsec:eqn:d3pm_p_st_unmasked_old}}} \nonumber \\
+    & \hspace{1em} + \underbrace{q(\z_s = \m | \z_t=\m, \x)\log \frac{q(\z_s = \m| \z_t=\m, \x)}{\p(\z_s = \m | \z_t=\m)}}_{\text{Simplify using \Eqn{eqn:d3pm_q_st_masked_old} and \Eqn{eqn:d3pm_p_st_masked_old}}}  \nonumber \\
+    & = \frac{\as - \at}{1 - \at} \log \frac{\at \xapproxm + (1 - \at)}{(1 - \at) \xapproxum} \nonumber \\
+    & \hspace{1em} + \frac{1 - \as}{1 - \at}\log \frac{(1 - \as)(\at \xapproxm + (1 - \at))}{(1 - \at)(\as \xapproxm + (1 - \as))}
+\end{align}
+
+Thus, $\kl(q(\z_s | \z_t, \x) \| \p(\z_s | \z_t))$
+can be written in the following manner where $\xtum$ 
+evaluates to 1 if $\z_t = \x$ 
+and $\xtm$ evaluates to 1 if $\z_t = \m$:
+
+\begin{align}
+    & \kl(q(\z_s | \z_t, \x) \| \p(\z_s | \z_t)) \nonumber \\
+    & = \underbrace{
+        \kl(q(\z_s | \z_t=\x, \x) \| \p(\z_s | \z_t=\x))
+        }_{=0 \;\text{, from \Eqn{eqn:d3pm_kl_0_old}}} \xtum + \underbrace{
+        \kl(q(\z_s | \z_t=\m, \x) \| \p(\z_s | \z_t=\m))}_{
+            \text{Given by \Eqn{eqn:d3pm_kl_discrete_old}}} \xtm 
+\end{align}
+
+Thus, we derive the diffusion loss, $\lossdiffdisc$, in the following manner:
+\begin{align}\label{subsec:eqn:d3pm_diffusion_loss}
+    \lossdiffdisc
+    & = \mathbb{E}_{t \in \left\{\frac{1}{T}, \frac{2}{T}, \dots, 1\right\}}\mathbb{E}_{q(\z_t | \x)} T\kl(q(\z_s | \z_t, \x) \| \p(\z_s | \z_t)) \nonumber \\
+    & = \mathbb{E}_{t \in \left\{\frac{1}{T}, \frac{2}{T}, \dots, 1\right\}}\mathbb{E}_{q(\z_t | \x)} T 
+    \bigg[\frac{\as - \at}{1 - \at} \log \frac{\at \xapproxm + (1 - \at)}{(1 - \at) \xapproxum} \nonumber \\
+    & \hspace{3.6cm} + \frac{1 - \as}{1 - \at}\log \frac{(1 - \as)(\at \xapproxm + (1 - \at))}{(1 - \at)(\as \xapproxm + (1 - \as))} \bigg] \xtm
+\end{align}
+Note that $\lossdiffdisc$ is 0 if $\z_t$ is an unmasked token i.e. $\z_t = \x$.
+
+\subsubsection{NELBO}\label{supp:subsec:d3pm_nelbo}
+\citet{austin2021structured, sohl2015deep} model $\alpha_i$ as $(\alpha_{i})_{i \in \{1, \dots, T\}} = 1 - \frac{i}{T}$ given latents $\z_{1,\dots,T}$. However, in this paper, we denote the latents as $\z_{t(0), \dots, t(T)}$; and hence, the $\alpha_\t$ are given as follows:
+\begin{align}\label{supp:eqn:alpha}
+    & (\alpha_i)_{i \in \{1, \dots, T\}} = 1 - \frac{i}{T} & \text{\footnotesize From~\citet{austin2021structured, sohl2015deep}.}\nonumber \\
+    & \implies (\alpha_{i})_{k \in \{1, \dots, T + 1\}} = 1 - \frac{i}{T + 1} & \text{\footnotesize For $T + 1$ latents} \nonumber \\
+    & \implies (\alpha_{i})_{i \in \{0, \dots, T\}} = 1 - \frac{i + 1}{T + 1}  & \text{\footnotesize Offsetting the indices by 1.} \nonumber \\
+    & \implies (\alpha_{\t})_{i \in \{0, \dots, T\}} = 1 - \frac{i + 1}{T + 1} & \text{\footnotesize Switching the notations from $\alpha_i$ to $\alpha_\t$.}
+\end{align}
+Consequently, from Equation \ref{supp:eqn:alpha}, we derive that
+\begin{align}
+    & \alpha_{t(0)} = \frac{T}{T+1}, \label{supp:eqn:alpha_0}\\
+    & \alpha_{t(T)} = 0.
+\end{align}
+Thus we have the following:
+\begin{align}
+    & \z_{t(0)} \sim \cat(.; \alpha_{t=0}\x + (1 - \alpha_{t=0})\m) = \cat\left(.; \frac{T}{T+1}\x + \frac{1}{T+1}\m\right),\label{supp:eqn:d3pm_q0} \\
+    & q(\z_{t(T)} | \x) = \cat(.; \alpha_{t=1} \x + (1 - \alpha_{t=1}) \m) = \cat(.; \m),\label{supp:eqn:d3pm_qT} \\
+    & p_\theta(\z_{t(T)}) = \cat(.; \m)\label{subsec:eqn:d3pm_prior}
+\end{align}
+The NELBO~\Eqn{eqn:elbo} simplifies to the following:
+\begin{align}\label{supp:eqn:elbo_d3pm}
+    & \E_q\left[
+    - \log p_\theta(\x | \z_{t(0)})
+    + \underbrace{\lossdiffdisc}_{
+        \text{Compute using ~\Eqn{subsec:eqn:d3pm_diffusion_loss}}}\right]
+    + \underbrace{\KL[q(\z_{t(T)} | \x) \| p_\theta(\z_{t(T)})]}_{= 0\;\;
+        \text{using ~\Eqn{supp:eqn:d3pm_qT} and \Eqn{subsec:eqn:d3pm_prior}}} \nonumber \\
+    & = \E_{q, t}\Bigg[
+    - \log p_\theta(\x | \z_{t(0)})
+    + T \bigg[\frac{\as - \at}{1 - \at} \log \frac{\at \xapproxm + (1 - \at)}{(1 - \at) \xapproxum} \nonumber \\
+    & \hspace{3.9cm} + \frac{1 - \as}{1 - \at}\log \frac{(1 - \as)(\at \xapproxm + (1 - \at))}{(1 - \at)(\as \xapproxm + (1 - \as))} \bigg] \xtm\Bigg]
+\end{align}
+
+
+
+
+
+
+
+
+
+
+
+
+\section{\algo{}}
+
+In this section, we show how \method{} parameterization can simplify the functional form of the NELBO as defined in \Eqn{supp:eqn:elbo_d3pm}.
+
+
+\subsection{Rao-Blackwellization}\label{supp:subsec:mdlm_rb}
+We employ the RB techniques as described in~\sec{subsec:subs} to simplify the 
+NELBO~\Eqn{supp:eqn:elbo_d3pm} to~\Eqn{subsec:eqn:d3pm_elbo_rb2} using RB2, and further 
+to~\Eqn{supp:eqn:elbo_mdlm_discrete} using RB1.
+
+\subsubsection{Zero Masking Probabilities}
+Using ``Zero Masking Probabilities'' (RB2) from~\sec{subsec:subs}, we set $\xapproxm = 0$ in~\Eqn{subsec:eqn:d3pm_diffusion_loss} to obtain the following simplified diffusion loss:
+\begin{align}\label{subsec:eqn:d3pm_diffusion_loss_rb2}
+    \lossdiffdiscrbmask
+    = \mathbb{E}_{t \in \left\{\frac{1}{T}, \frac{2}{T}, \dots, 1\right\}}\mathbb{E}_{q(\z_t | \x)} T 
+    \left[\frac{\as - \at}{1 - \at} \log \frac{1}{\xapproxum} \right] \xtm \nonumber \\
+    = \mathbb{E}_{t \in \left\{\frac{1}{T}, \frac{2}{T}, \dots, 1\right\}}\mathbb{E}_{q(\z_t | \x)} T 
+    \left[\frac{\at - \as}{1 - \at} \log {\xapproxum} \right] \xtm.
+\end{align}
+The corresponding Rao-Blackwellized NELBO is given as:
+\begin{align}\label{subsec:eqn:d3pm_elbo_rb2}
+    & \E_q\left[
+    - \log p_\theta(\x | \z_{t(0)})
+    + \underbrace{\lossdiffdiscrbmask}_{
+        \text{Compute using ~\Eqn{subsec:eqn:d3pm_diffusion_loss_rb2}}}\right]
+    + \underbrace{\KL[q(\z_{t(T)} | \x) \| p_\theta(\z_{t(T)})]}_{
+        =0 \;\; \text{using ~\Eqn{supp:eqn:d3pm_qT} and \Eqn{subsec:eqn:d3pm_prior}}} \nonumber \\
+    & = \E_{q,t}\left[
+    - \log p_\theta(\x | \z_{t(0)})
+    + T \left[\frac{\at - \as}{1 - \at} \log {\xapproxum} \right] \xtm\right]
+\end{align}
+
+
+\subsubsection{Carry Over Unmasking}
+Notice that the term $\xtm$ in~\Eqn{subsec:eqn:d3pm_diffusion_loss_rb2} is intended to reduce the diffusion loss to zero when $\z_t = \x$. Now, we will demonstrate that, by applying “Carry Over Unmasking” (RB1) from~\sec{subsec:subs}, $\xtm$ can be removed from~\Eqn{subsec:eqn:d3pm_diffusion_loss_rb2}.
+
+Recall that RB1 guarantees $\xapprox = \x$ when $\z_t = \x$. Thus, with the RB1 parameterization, the diffusion loss in~\Eqn{subsec:eqn:d3pm_diffusion_loss_rb2} becomes zero for $\z_t = \x$, as $\log \xapproxm = 0$. Consequently, $\xtm$ can be safely omitted from~\Eqn{subsec:eqn:d3pm_elbo_rb2}, yielding the following diffusion loss:
+\begin{align}\label{subsec:eqn:d3pm_elbo_rb2_rb1}
+    \lossdiffdiscrb = \mathbb{E}_{t \in \left\{\frac{1}{T}, \frac{2}{T}, \dots, 1\right\}}\mathbb{E}_{q(\z_t | \x)} T 
+    \left[\frac{\at - \as}{1 - \at} \log {\xapproxum} \right]
+\end{align}
+
+
+
+\subsubsection{NELBO}\label{supp:subsec:mdlm_discrete}
+Thus, we have the following NELBO:
+\begin{align}\label{supp:eqn:elbo_mdlm_discrete}
+    & \E_q\left[
+    - \log p_\theta(\x | \z_{t(0)})
+    + \underbrace{\lossdiffdiscrb}_{
+        \text{Compute using ~\Eqn{subsec:eqn:d3pm_elbo_rb2_rb1}}}\right]
+    + \underbrace{\KL[q(\z_{t(T)} | \x) \| p_\theta(\z_{t(T)})]}_{
+        \text{$=0$ using ~\Eqn{supp:eqn:d3pm_qT} and \Eqn{subsec:eqn:d3pm_prior}}} \nonumber \\
+    & = \E_{q,t}\left[
+    - \log p_\theta(\x | \z_{t(0)})
+    + T \left[\frac{\at - \as}{1 - \at} \log {\xapproxum} \right] \right]
+\end{align}
+\paragraph{Comparing~\Eqn{supp:eqn:elbo_mdlm_discrete} and~\Eqn{subsec:eqn:d3pm_elbo_rb2}.}
+Note that due to RB1, $\log p_\theta(\x | \z_{t(0)})$ in~\Eqn{supp:eqn:elbo_mdlm_discrete} reduces to 0 every time $\z_{t(0)} = \x$ as explained in~\Eqn{supp:eqn:mdlm_cont_z0}. However, this is not the case in~\Eqn{subsec:eqn:d3pm_elbo_rb2}, even though it has a functionally similar expression to~\Eqn{supp:eqn:elbo_mdlm_discrete}. Because of this reason~\Eqn{supp:eqn:elbo_mdlm_discrete} should lead to a better likelihood estimate and we empirically verify this in~\tab{tab:lm1b-ablation}.
+
+
+\subsection{Continuous Time}\label{supp:subsec:mdlm_continuous}
+\subsubsection{Diffusion Loss}
+To derive the continuous-time diffusion loss, $\lossdiffcont$, we consider the limiting case $\lim_{T \to \infty}\lossdiffdiscrb$~\Eqn{subsec:eqn:d3pm_elbo_rb2_rb1}:
+\begin{align}
+    \lossdiffcont
+    & = \lim_{T \to \infty} \lossdiffdiscrb & \nonumber \\
+    & = \mathbb{E}_{t \in \left\{\frac{1}{T}, \frac{2}{T}, \dots, 1\right\}, q(\z_t | \x)}
+        \left[\lim_{T \to \infty}T \frac{\at - \as}{1 - \at} \log \xapproxum \right] & \nonumber \\
+    & = \mathbb{E}_{t \sim \mathcal{U}[0, 1], q(\z_t | \x)} 
+    \left[\frac{\dat}{1 - \at} \log \xapproxum \right] & \text{\footnotesize Using $\lim_{T \to \infty}T (\at - \as) = \dat$}
+\end{align}
+
+\subsubsection{Reconstruction Loss}
+For the continous time case, from~\Eqn{supp:eqn:d3pm_q0}, we have
+\begin{align}\label{supp:eqn:mdlm_cont_z0}
+    & \z_{t(0)} \sim  \lim_{T \to \infty} \cat\left(.; \frac{T}{T+1}\x + \frac{1}{T+1}\m\right) \nonumber \\
+    & \implies \z_{t(0)} \sim  \cat\left(.; \x \right) \nonumber \\
+    & \implies \z_{t(0)} = \x
+\end{align}
+Thus, the reconstruction loss reduces to 0 in the following manner:
+\begin{align}\label{supp:eqn:mdlm_loss_recons}
+    \lossrecons & = - \log p_\theta(\x | \z_{t(0)}) & \nonumber \\
+                & = - \log p_\theta(\x | \z_{t(0)}=\x) &\text{\footnotesize From~\Eqn{supp:eqn:mdlm_cont_z0}}  \nonumber \\
+                & = - \log \langle \denoise(\x, t(0)), \x \rangle & \nonumber \\
+                & = - \log \langle \x, \x \rangle & \text{\footnotesize Due to ``carry-over unmasking'' $\denoise(\x, t(0)) = \x$} \nonumber \\
+                & = 0.  &
+\end{align}
+
+\subsubsection{NELBO}
+Thus, we have the following NELBO:
+\begin{align}\label{supp:eqn:elbo_mdlm_cont}
+    & \E_q\left[
+    - \underbrace{\log p_\theta(\x | \z_{t(0)})}_{\text{ $=0$ from~\Eqn{supp:eqn:mdlm_loss_recons}}}
+    + \underbrace{\lossdiffcont}_{
+        \text{Compute using ~\Eqn{subsec:eqn:d3pm_elbo_rb2_rb1}}}\right]
+    + \underbrace{\KL[q(\z_{t(T)} | \x) \| p_\theta(\z_{t(T)}, t)]}_{
+        \text{$=0$ using ~\Eqn{supp:eqn:d3pm_qT} and \Eqn{subsec:eqn:d3pm_prior}}} \nonumber \\
+    & = \boxed{\E_{q,t}\left[ \frac{\dat}{1 - \at} \log \xapproxum \right]}
+\end{align}
+
+\subsection{Final Algorithm}\label{app:subsec:mdlm_training}
+In Algorithm \ref{algo:mdlm_train}, we present the training algorithm for MDLM.
+
+\begin{algorithm}
+\caption{Training MDLM}
+\label{algo:mdlm_train}
+\begin{algorithmic}[1]
+\State \textbf{repeat}
+\State \ \ \ \ $ \x^{1:L} \sim q(\mathbf{x}) $ \Comment{Sample a sentence.}
+\State \ \ \ \ $ t \sim \mathcal{U}[0, 1] $ \Comment{Sample a time step.}
+\State \ \ \ \ $ \z^\ell_t \sim \cat(\z^\ell_t; \at \x^\ell + (1 - \at)\m) $ $\forall$ $1 \leq \ell \leq L$ \Comment{Mask Each token $\x^\ell$ independently to obtain the latent $\z^{1:L}_t$.}
+\State \ \ \ \ Take gradient descent step on
+\[
+\nabla_\theta \frac{\dat}{1 - \at} \sum_{\ell} \log \langle \denoise^\ell(\z^{1:L}_t, t), \x^\ell \rangle
+\]
+\State \textbf{until} converged
+\end{algorithmic}
+\end{algorithm}
+
+\section{Concrete Score Matching}\label{app:sec:score_matching}
+In the previous section, we defined the discrete diffusion process as a Discrete-Time Markov Chain (DTMC) with a finite set of $T$ states, $\z_{\{0, \frac{1}{T}, \dots, 1\}}$, and a state transition matrix $\Qt$. To derive the continuous-time ELBO, we simply take the limit as $T \to \infty$.
+
+In contrast, \citet{campbell2022continuous} and \citet{lou2023discrete} defined the discrete diffusion process as a Continuous-Time Markov Chain (CTMC), where the forward corruption process is specified by the rate change matrix $\Rt \in \mathbb{R}^{|\onehotset| \times |\onehotset|}$, which can be thought of as the instantaneous rate at which one state transitions to another. With this formulation, the forward posterior $q(\z_t|\z_s)$ and the true reverse posterior $q(\z_s | \z_t, \x)$ can be expressed in terms of the rate change matrix as follows:
+\begin{align}
+    & q(\z_t = \y' | \z_s = \y) = \delta_{\y', \y} + \Rt(\y', \y)\frac{1}{T} + \mathcal{O}\left(\frac{1}{T^2}\right) \label{eqn:forward_rate}\\
+    & q(\z_s = \y' | \z_t = \y, \x) = \delta_{\y', \y} + \Rrevt(\y', \y)\frac{1}{T} + \mathcal{O}\left(\frac{1}{T^2}\right) \label{eqn:true_reverse_rate}
+\end{align}
+where $\delta$ is the Kroenecker delta and $\mathcal{O}(\frac{1}{T^2})$ represents higher order terms of $\frac{1}{T^2}$. In~\sec{app:subsec:ctmc_rate_matrix}, we show how to express the rate matrix $R_t$ in terms of the state transition matrix $\Qt$.
+\citet{lou2023discrete} propose a continuous time ELBO for this process.
+They mention that this expression can be derived from \citet{benton2022denoising}, though they do not provide an explicit derivation. For this reason, we present a rigorous derivation in \sec{app:subsec:sedd_nelbo} and further demonstrate that, under the SUBS parameterization in \sec{subsec:subs}, this formula reduces to our proposed continuous-time ELBO, given by \Eqn{eqn:dif_loss_cont_subs}.
+
+For the remainder of this section, we switch to the notation $\qts(\y' | \y)$ to denote $q(\z_t = \y' | \z_s = \y)$, $\qst(\y' | \y)$ for $q(\z_s = \y' | \z_t =\y)$, and $q(\z_t = \y | \x)$ for $q_t(\y | \x)$, aligning with the notation typically used in the CTMC literature.
+
+\subsection{Extracting the Rate Matrix}\label{app:subsec:ctmc_rate_matrix}
+Here, we aim to express the rate change matrix $\Rt$ in terms of the state transition matrix $\Qt$. To do this, we first represent the forward transition $\qts$ in terms of $\Qt$ and $\Rt$ separately, allowing us to illustrate their relationship.
+
+Using \Eqn{eqn:d3pm_Q_discrete_old}, we can write $\qts$ as follows:
+\begin{align}\label{eqn:forward_scalar_probability}
+    \qts(\y'| \y)
+        & = [\y']^\top [\ats \bfI+ (1 - \ats)\vone \m^\top]^\top \y \nonumber \\
+        & = [\y']^\top [\ats \y + (1 - \ats)\m \vone ^\top \y] \nonumber \\
+        & = [\y']^\top [\ats \y + (1 - \ats)\m] \nonumber \\
+        & = \ats [\y']^\top \y + (1 - \ats)[\y']^\top \m
+\end{align}
+Now let's analyze all possible combinations for the tuple $(\y', \y)$:
+
+\paragraph{1. Case $(\y' = \x, \y = \x)$:} Using \Eqn{eqn:forward_scalar_probability},
+we find that $\qts(\x|\x) = \ats$ for the DTMC. By \Eqn{eqn:forward_rate}, we have $\qts(\x | \x) = 1 + \Rt(\x, \x)\frac{1}{T}$ as $T \to \infty$, since the higher-order terms $\mathcal{O}\left(\frac{1}{T^2}\right)$ vanish in the limit. Thus, we get:
+\begin{align}
+    & \lim_{T \to \infty}\left[1 + \Rt(\x, \x)\frac{1}{T}\right] = \lim_{T \to \infty}\ats \nonumber \\
+    & \implies \Rt(\x, \x) = \lim_{T \to \infty} T (\ats - 1) = \frac{\dat}{\at}
+\end{align}
+
+\paragraph{2. Case $(\y' = \m, \y \in \onehotset - \{\m\})$:} Similarly, using~\Eqn{eqn:forward_scalar_probability} and~\Eqn{eqn:forward_rate}, we have $\qts(\m|\y \neq \m) = 1 - \ats$ and $\qts(\x | \y \neq \m) = \Rt(\m, \y \neq \m)\frac{1}{T}$. Thus, 
+\begin{align}\label{eqn:mdlm_rate_mask}
+    & \lim_{T \to \infty}\left[\Rt(\m, \y \neq \m)\frac{1}{T}\right] = \lim_{T \to \infty}[1 - \ats] \nonumber \\
+    & \implies \Rt(\m, \y \neq \m) = \lim_{T \to \infty} T (1 - \ats ) = - \frac{\dat}{\at}
+\end{align}
+
+\paragraph{3. Case $(\y' = \m, \y = \m)$:} Using~\Eqn{eqn:forward_scalar_probability} and\Eqn{eqn:forward_rate}, we find $\qts(\m|\m) = 1$ and $\qts(\m | \m) = 1 + \Rt(\m, \m)\frac{1}{T} + \mathcal{O}\left(\frac{1}{T^2}\right)$. Since these two expressions must be equal for any $T$, it follows that
+\begin{align}
+    \Rt(\m, \m) =  0.
+\end{align}
+Note that when $\Rt(\m, \m)$ is constant, the term $\mathcal{O}\left(\frac{1}{T^2}\right)$ reduces to zero, as it includes higher-order time derivatives of $\Rt$.
+
+\paragraph{4. Case $(\y' = \x, \y \in \onehotset - \{\x\})$:} In the context of absorbing state diffusion, these states are never observed. Thus,
+\begin{align}\label{eqn:mdlm_rate_neq_x_m}
+    \Rt(\y' = \x, \y \in \onehotset - \{\m, \x\}) = 0
+\end{align}
+
+\paragraph{5. Case $(\y' \in \onehotset - \{\m, \x\}, \y \in \{\m, \x\})$:} In the context of absorbing state diffusion, these states are never observed. Thus,
+\begin{align}
+    \Rt(\y' \in \onehotset - \{\m, \x\}, \y \in \{\m, \x\}) = 0
+\end{align}
+
+Finally, we can express the forward rate matrix as:
+\begin{align}\label{eqn:mdlm_rate_matrix}
+    \boxed{\Rt = \frac{\dat}{\at}\left(\bfI - \m \vone^\top\right)}
+\end{align}
+It can be seen that the columns of this matrix sum to zero, i.e., 
+\begin{align}
+    \sum_{\y' \in \onehotset}\Rt(\y', \y) = 0 \implies \Rt(\y, \y) = \sum_{\y' \neq \y}\Rt(\y', \y),
+\end{align}
+which ensures that the probability mass is preserved in the forward diffusion process. Similarly, the reverse rate matrix $\Rrevt$ can be written in terms of the forward rate matrix $\Rt$ as follows~\citep{lou2023discrete}:
+\begin{align}\label{eqn:true_reverse_rate_property}
+    \Rrevt(\y', \y) = 
+        \begin{cases}
+            \frac{q_t(\y'|\x)}{q_t(\y | \x)}\Rt(\y, \y') & \text{\footnotesize $\y' \neq \y$}\\
+            - \sum_{\tilde \y \neq \y}\frac{q_t(\tilde \y|\x)}{q_t(\y | \x)}\Rt(\y, \tilde \y) & \text{\footnotesize $\y' = \y$}.
+        \end{cases}
+\end{align}
+
+
+\subsection{NELBO}\label{app:subsec:sedd_nelbo}
+\citet{meng2022concrete} introduced the term ``concrete score'' for the term $q_t(\y'|\x) / q_t(\y|\x)$ that appears in  $\Rrevt$. Since this quantity is not directly accessible in the reverse diffusion process, we approximate it using a neural network, $\sedd: \onehotset \to \onehotset$, with parameters $\theta$. The approximate reverse posterior $\pst$ can then be expressed in terms of the approximate reverse rate matrix $\Rrevt$ in the following manner:
+\begin{align}    
+    & \pst(\y' | \y) = \delta_{y', y} + \Rrevapprox(\y', \y) \frac{1}{T} + \mathcal{O}\left(\frac{1}{T^2}\right)\label{eqn:approx_reverse_rate}\\
+    & \Rrevapprox(\y', \y) = 
+        \begin{cases}
+            \sedd(\y)_{\y'}\Rt(\y, \y') & \text{\footnotesize $\y' \neq \y$}\\
+            - \sum_{\tilde \y \neq \y}\sedd(\y)_{\tilde \y}\Rt(\y, \tilde \y) & \text{\footnotesize $\y' = \y$}
+        \end{cases}\label{eqn:approx_reverse_rate_property}
+\end{align}
+where $\sedd(\y)_{\y'}$ denotes the approximate concrete score $q_t(\y'|\x) / q_t(\y|\x)$.~\citet{lou2023discrete} propose the following NELBO to train such a model:
+\begin{align}
+    \mathbb{E}_{t \in [0, 1], \y \sim q_t(. | \x)} \left[
+    \sum_{\y' \neq \y} \Rt(\y, \y') \left(
+        \sedd(\y)_{\y'}
+        - \frac{q_t(\y'|\x)}{q_t(\y | \x)}\log \sedd(\y)_{\y'}
+        + K\left(\frac{q_t(\y'|\x)}{q_t(\y | \x)}\right) 
+        \right) \right]
+\end{align}
+where $K(a) = a \log a - a $. They mention that this expression can be derived from \citet{benton2022denoising}, though they do not provide an explicit derivation. For this reason, we present a rigorous derivation in the following section.%
+
+\paragraph{Proof.} Let’s focus on the diffusion loss for this process. As mentioned in the previous section, the reconstruction and prior loss terms reduce to zero. The continuous-time diffusion loss is given by:
+\begin{align}\label{eqn:sedd_nelbo_partial}
+    & \lim_{T \to \infty} T  \mathbb{E}_{t \in \{\frac{1}{T}, \frac{2}{T}, \ldots, 1\}, \y \sim q_t(. | \x)} [\kl (\qst(\y' | \y, \x) \| p_{s|t}(\y' | \y))] \nonumber \\
+    & = \lim_{T \to \infty} T  \mathbb{E}_{t \in \{\frac{1}{T}, \frac{2}{T}, \ldots, 1\}, \y \sim q_t(. | \x)} \left[\sum_{\y'} \qst(\y' | \y, \x) \log \frac{\qst(\y' | \y, \x)}{p_{s|t}(\y' | \y, \x)} \right] \nonumber \\
+    & = \mathbb{E}_{t \in [0, 1], \y \sim q_t(. | \x)} \left[\lim_{T \to \infty} T \sum_{\y'} \qst(\y' | \y, \x) \log \frac{\qst(\y' | \y, \x)}{p_{s|t}(\y' | \y, \x)} \right] \nonumber \\
+    & = \mathbb{E}_{t \in [0, 1], \y \sim q_t(. | \x)} \left[
+        \underbrace{\lim_{T \to \infty} T \qst(\y | \y, \x) \log \frac{\qst(\y | \y, \x)}{p_{s|t}(\y | \y, \x)}}_{\textbf{Term 1}} + 
+        \underbrace{\lim_{T \to \infty} T \sum_{\y' \neq \y} \qst(\y' | \y, \x) \log \frac{\qst(\y' | \y, \x)}{p_{s|t}(\y' | \y, \x)}}_{\textbf{Term 2}} \right]
+\end{align}
+Let's simplify these two terms separately. For the derivation, we'll rely on two key observations: In the limiting case as $T \to \infty$, it follows from~\Eqn{eqn:true_reverse_rate} that $\lim_{T \to \infty} \qst(\y | \y, \x) = 1$ and from~\Eqn{eqn:approx_reverse_rate} that $\lim_{T \to \infty} \pst(\y | \y, \x) = 1$.
+\paragraph{Term 1:}
+\begin{align}\label{eqn:cont_elbo_sedd_term1}
+    & \lim_{T \to \infty} T \qst(\y | \y, \x) \log \frac{\qst(\y | \y, \x)}{p_{s|t}(\y | \y, \x)} & \nonumber \\
+    & \text{\footnotesize $\because \lim_{T \to \infty}\qst(\y | \y, \x) = 1$; hence,} \nonumber \\
+    & = \lim_{T \to \infty} T \log \frac{\qst(\y | \y, \x)}{p_{s|t}(\y | \y, \x)} \nonumber \\
+    & \text{\footnotesize The above term is in $\infty \times 0$ indeterminate form; therefore,}& \nonumber \\
+    & = \lim_{T \to \infty} T \left( \log \qst(\y | \y, \x) - \log \pst(\y | \y, \x)\right) \nonumber \\
+    & \text{\footnotesize Substituting $\qst$ and $\pst$ from \Eqn{eqn:true_reverse_rate} and~\Eqn{eqn:approx_reverse_rate}, we get:}\nonumber \\
+    & = \lim_{T \to \infty} T \left[ \log \left (1 + \Rrevt(\y, \y) \frac{1}{T} + \mathcal{O}\left(\frac{1}{T^2}\right)\right) - \log \left (1 + \Rrevapprox(\y, \y) \frac{1}{T}+ \mathcal{O}\left(\frac{1}{T^2}\right)\right) \right] \nonumber \\
+    & \text{\footnotesize Applying the Taylor series expansion for $\log (1 + x)$, we get:} \nonumber \\
+    & = \lim_{T \to \infty} T \left[\Rrevt(\y, \y) \frac{1}{T} + \mathcal{O}\left(\frac{1}{T^2}\right) - \Rrevapprox(\y, \y)\frac{1}{T} - \mathcal{O}\left(\frac{1}{T^2}\right)\right] \nonumber \\
+    & = \Rrevt(\y, \y) + \lim_{T \to \infty} T \mathcal{O}\left(\frac{1}{T^2}\right) - \Rrevapprox(\y, \y) - \lim_{T \to \infty} T \mathcal{O}\left(\frac{1}{T^2}\right) \nonumber \\
+    &\text{\footnotesize $\because \lim_{T \to \infty} T \mathcal{O}\left(\frac{1}{T^2}\right) = 0$, we get:} \nonumber \\
+    & = \Rrevt(\y, \y) - \Rrevapprox(\y, \y) \nonumber \\
+    & \text{\footnotesize Using \Eqn{eqn:true_reverse_rate_property} and~\Eqn{eqn:approx_reverse_rate_property}, we get:} \nonumber \\
+    & = - \sum_{\y' \neq \y}\Rt(\y, \y') \left( \frac{q_t(\y'|\x)}{q_t(\y | \x)}  - \sedd(\y)_{\y'} \right)  
+\end{align}
+
+\paragraph{Term 2:}
+
+\begin{align}\label{eqn:cont_elbo_sedd_term2}
+    & \lim_{T \to \infty} T \sum_{\y' \neq \y}  \qst(\y' | \y, \x) \log \frac{\qst(\y' | \y, \x)}{p_{s|t}(\y' | \y, \x)} \nonumber \\
+    & \text{\footnotesize Substituting $\qst$ and $\pst$ from \Eqn{eqn:true_reverse_rate} and~\Eqn{eqn:approx_reverse_rate}, we get:}\nonumber \\
+    & = \lim_{T \to \infty} T \sum_{\y' \neq \y}  \left[\left[\frac{q_s(\y'|\x)}{q_t(\y | \x)}\Rt(\y, \y') \frac{1}{T} + \mathcal{O}\left(\frac{1}{T^2}\right) \right] \log \frac{\frac{q_s(\y'|\x)}{q_t(\y | \x)}\Rt(\y, \y') \frac{1}{T} + \mathcal{O}\left(\frac{1}{T^2}\right)}{\sedd(\y)_{\y'}\Rt(\y, \y') \frac{1}{T} + \mathcal{O}\left(\frac{1}{T^2}\right)} \right]\nonumber \\
+    & = \lim_{T \to \infty} \sum_{\y' \neq \y} \left[\left[ \frac{q_s(\y'|\x)}{q_t(\y | \x)}\Rt(\y, \y') + T \mathcal{O}\left(\frac{1}{T^2}\right) \right] \log \frac{\frac{q_s(\y'|\x)}{q_t(\y | \x)}\Rt(\y, \y') + T \mathcal{O}\left(\frac{1}{T^2}\right)}{\sedd(\y)_{\y'}\Rt(\y, \y') + T \mathcal{O}\left(\frac{1}{T^2}\right)} \right]\nonumber \\
+    &\text{\footnotesize $\because \lim_{T \to \infty} T \mathcal{O}\left(\frac{1}{T^2}\right) = 0$, we get:} \nonumber \\
+    & = \sum_{\y' \neq \y}  \frac{q_s(\y'|\x)}{q_t(\y | \x)}\Rt(\y, \y')  \log \frac{\frac{q_s(\y'|\x)}{q_t(\y | \x)}\cancel{\Rt(\y, \y')}}{\sedd(\y)_{\y'}\cancel{\Rt(\y, \y')}} \nonumber \\
+    & = \sum_{\y' \neq \y}  \frac{q_t(\y'|\x)}{q_t(\y | \x)}\Rt(\y, \y') \left( \log \frac{q_t(\y'|\x)}{q_t(\y | \x)} - \log \sedd(\y)_{\y'} \right)
+\end{align}
+
+Finally, plugging \Eqn{eqn:cont_elbo_sedd_term1} and \Eqn{eqn:cont_elbo_sedd_term2} into~\Eqn{eqn:sedd_nelbo_partial} yields us the NELBO as proposed in~\citet{lou2023discrete}:
+\begin{align}\label{eqn:sedd_elbo}
+    & \mathbb{E}_{t \in [0, 1], \y \sim q_t(. | \x)} \Bigg[- \sum_{\y' \neq \y}\Rt(\y, \y') \left( \frac{q_t(\y'|\x)}{q_t(\y | \x)}  - \sedd(\y)_{\y'} \right) \nonumber \\
+    & \hspace{2.57cm} + \sum_{\y' \neq \y}  \frac{q_t(\y'|\x)}{q_t(\y | \x)}\Rt(\y, \y') \Bigg( \log \frac{q_t(\y'|\x)}{q_t(\y | \x)} - \log \sedd(\y)_{\y'} \Bigg) \Bigg] \nonumber \\
+    & = \mathbb{E}_{t \in [0, 1], \y \sim q_t(. | \x)} \Bigg[\sum_{\y' \neq \y}\Rt(\y, \y') \Bigg( - \frac{q_t(\y'|\x)}{q_t(\y | \x)}  + \sedd(\y)_{\y'}  \nonumber \\
+    & \hspace{5.1cm} + \frac{q_t(\y'|\x)}{q_t(\y | \x)} \log \frac{q_t(\y'|\x)}{q_t(\y | \x)} - \frac{q_t(\y'|\x)}{q_t(\y | \x)} \log \sedd(\y)_{\y'} \Bigg)\Bigg] \nonumber \\
+    & = \boxed{\mathbb{E}_{t \in [0, 1], \y \sim q_t(. | \x)} \left[
+    \sum_{\y' \neq \y} \Rt(\y, \y') \left(
+        \sedd(\y)_{\y'}
+        - \frac{q_t(\y'|\x)}{q_t(\y | \x)}\log \sedd(\y)_{\y'}
+        + K\left(\frac{q_t(\y'|\x)}{q_t(\y | \x)}\right) 
+        \right) \right]}
+\end{align}
+where $K(a) = a \log a - a$. This concludes the proof.
+
+
+\subsection{Concrete Score for \algo{}}\label{app:subsec:subs_score}
+Given a latent variable $\z_t$ and the output of the denoising model, $\xapprox$ parameterized using SUBS, we aim to recover the concrete score $\sedd(\z_t) \in (\mathbb{R}^+ + \{0\})^{|\onehotset|}$. Note that $\sedd(\z_t)_\y$ 
+is the ratio $\frac{p_t(\y)}{p_t(\z_t)}$ in the reverse process. Since $\denoise$ approximates $\x$, we use \(p_t(\y) = q_t(\y | \xapprox)\); therefore,
+\begin{align}\label{eqn:score_approximation}
+    \sedd(\z_t)_\y = \frac{p_t(\y)}{p_t(\z_t)} = \frac{q_t(\y | \xapprox)}{q_t(\z_t | \xapprox)}.
+\end{align}
+To obtain the score, we first compute $q_t(\y | \xapprox)$ for all possible $\y$ and $\z_t$. Using~\Eqn{eqn:interpolating_forward}, we derive the following expressions under the SUBS parameterization:
+\begin{align}
+    q_t(\y \neq \m| \denoise(\z_t = \m, t)) & = \at \langle \xapprox, \y \rangle \label{eqn:subs_score}\\
+    q_t(\y \not \in \{\m, \z_t\}| \denoise(\z_t \neq \m, t)) & = 0 \label{eqn:subs_score_2}\\
+    q_t(\y = \z_t| \denoise(\z_t \neq \m, t)) & = \at \label{eqn:subs_score_3}\\
+    q_t(\y = \m| \denoise(\z_t \in \onehotset, t))  & = 1 - \at  \label{eqn:subs_score_4}
+\end{align}
+Plugging these into~\Eqn{eqn:score_approximation}, we get:
+\begin{align}
+    & \sedd(\z_t = \m)_{\y \neq \m} = \frac{\at}{1 - \at} \langle \xapprox, \y \rangle & \text{\footnotesize Using~\Eqn{eqn:subs_score_4} and~\Eqn{eqn:subs_score}}\label{eqn:subs_score_1}\\
+    & \sedd(\z_t = \m)_{\y = \m} = 1 & \text{\footnotesize Using~\Eqn{eqn:subs_score_4}}\\
+    & \sedd(\z_t \neq \m)_{\y = \m} = \frac{1 - \at}{\at} & \text{\footnotesize Using~\Eqn{eqn:subs_score_3} and~\Eqn{eqn:subs_score_4}}\\
+    & \sedd(\z_t \neq \m)_{\y = \z_t} = 1 & \text{\footnotesize Using~\Eqn{eqn:subs_score_3}}\\
+    & \sedd(\z_t \neq \m)_{\y \not \in \{\m, \z_t\}} = 0 & \text{\footnotesize Using~\Eqn{eqn:subs_score_2} and~\Eqn{eqn:subs_score_3}}
+\end{align}
+These can be consolidated into the following expression:
+\begin{align}\label{eqn:subs_score_vectorized}
+        \boxed{\sedd(\z_t)_\y = \y^\top \left[\delta_{\z_t, \m} \frac{\at}{1 - \at} \xapprox + (1 - \delta_{\z_t, \m}) \frac{1 - \at}{\at}\m  + \z_t\right]}
+\end{align}
+
+\subsection{Reverse Rate Matrix for \algo{}}\label{app:subsec:mdlm_reverse_rate}
+We can formulate the reverse rate matrix for \algo{} using~\Eqn{eqn:subs_score_vectorized} and~\Eqn{eqn:mdlm_rate_matrix}. Recall that the reverse rate matrix $\Rrevt(\y', \y)$ is given by:
+\begin{align}
+        \Rrevt(\y', \y)
+        & =  \begin{cases}
+            \sedd(\y)_{\y'}\Rt(\y, \y') & \text{\footnotesize $\y' \neq \y$}\\
+            - \sum_{\tilde \y \neq \y}\sedd(\y)_{\y'}\Rt(\y, \tilde \y) & \text{\footnotesize $\y' = \y$}.
+        \end{cases} \nonumber
+\end{align}
+Let’s examine the cases where $\y = \m$ and $\y \neq \m$.
+\paragraph{Case $\y = \m$:} 
+For $\y' \neq \m$, the reverse rate $\Rrevt(\y', \y = \m)$ is given by:
+\begin{align}\label{eqn:mdlm_reverse_rate_1}
+    & \Rrevt(\y'\neq \m, \y = \m) \nonumber \\
+    & = \sedd(\y = \m)_{\y' \neq \m}\Rt(\y = \m, \y') \nonumber \\
+    & \text{\footnotesize Using~\Eqn{eqn:subs_score_1} and~\Eqn{eqn:mdlm_rate_matrix}, we get:} \nonumber \\
+    & = \frac{\at}{1-\at}\langle \xapprox, \y' \rangle \left[- \frac{\dat}{\at}\right] \nonumber \\
+    & = - \frac{\dat}{1-\at}\langle \xapprox, \y' \rangle
+\end{align}
+For $\y' = \m$, the reverse rate $\Rrevt(\y', \y = \m)$ is given by:
+\begin{align}\label{eqn:mdlm_reverse_rate_1_prime}
+    & \Rrevt(\y' = \m, \y = \m) \nonumber \\
+    &=  - \sum_{\tilde \y \neq \m}\Rrevt(\tilde \y, \y = \m) \nonumber \\
+    & \text{\footnotesize Using~\Eqn{eqn:mdlm_reverse_rate_1}, we get:} \nonumber \\
+    & = \sum_{\tilde \y \neq \m} \frac{\dat}{1-\at}\langle \xapprox, \tilde \y \rangle \nonumber \\
+    & = \frac{\dat}{1-\at} \sum_{\tilde \y \neq \m} \langle \xapprox, \tilde \y \rangle \nonumber \\
+    & \text{\footnotesize “zero-masking probability” in~\sec{subsec:subs} $\implies \sum_{\tilde \y \neq \m} \langle \xapprox, \tilde \y \rangle = 1$; hence,} \nonumber \\
+    & = \frac{\dat}{1-\at}.
+\end{align}
+
+\paragraph{Case $\y \neq \m$:} For $\y' \neq \y$ we have:
+\begin{align}\label{eqn:mdlm_reverse_rate_2}
+    & \Rrevt(\y' \notin \{\y, \m\}, \y \neq \m) \nonumber \\
+    & = \sedd(\y \neq \m)_{\y' \notin \{\y, \m\}} \underbrace{\Rt(\y \neq \m, \y' \notin \{\y, \m\})}_{\text{$= 0$ from~\Eqn{eqn:mdlm_rate_matrix}}} \nonumber \\
+    & = 0
+\end{align}
+For $\y' = \m$, we have:
+\begin{align}\label{eqn:mdlm_reverse_rate_3}
+    & \Rrevt(\y' = \m, \y \neq \m) \nonumber \\
+    & = \sedd(\y \neq \m)_{\y' = \m} \underbrace{\Rt(\y \neq \m, \y'  = \m)}_{\text{$= 0$ from~\Eqn{eqn:mdlm_rate_matrix}}} \nonumber \\
+    & = 0
+\end{align}
+Thus, for $\y' = \y$, we have:
+\begin{align}\label{eqn:mdlm_reverse_rate_4}
+    & \Rrevt(\y' = \y, \y \neq \m) \nonumber \\
+    &=  - \sum_{\tilde \y \neq \y}\Rrevt(\tilde \y, \y \neq \m) \nonumber \\
+    & = - \underbrace{\Rrevt(\tilde \y = \m, \y \neq \m)}_{\text{$=0$ from~\Eqn{eqn:mdlm_reverse_rate_3}}} - \underbrace{\sum_{\tilde \y \notin \{\y, \m\}} \Rrevt(\tilde \y, \y \neq \m)}_{\text{$=0$ from~\Eqn{eqn:mdlm_reverse_rate_2}}}  \nonumber \\
+    & = 0
+\end{align}
+Summarizing~\Eqn{eqn:mdlm_reverse_rate_1},~\Eqn{eqn:mdlm_reverse_rate_1_prime},~\Eqn{eqn:mdlm_reverse_rate_2},~\Eqn{eqn:mdlm_reverse_rate_3},~\Eqn{eqn:mdlm_reverse_rate_4}, we have:
+\begin{align}\label{eqn:reverse_rate_mdlm}
+    \Rrevt(\y', \y) & =
+        \begin{cases}
+            - \langle \denoise (\y, t), \y' \rangle \frac{\dat}{1 - \at} & \text{\footnotesize $\y' \neq \m, \y = \m$}\\
+            \frac{\dat}{1 - \at} & \text{\footnotesize $\y' = \m, \y = \m$} \\
+            0 & \text{\footnotesize otherwise.}
+        \end{cases} \nonumber \\
+        & = \boxed{- \frac{\dat}{1 - \at} [\y']^\top [\denoise (\y, t) - \m] \langle \y, \m \rangle}
+\end{align}
+
+\subsection{Deriving \algo{}'s NELBO via CTMC}\label{app:subsec:subs_nelbo_ctmc}
+Now, we aim to show that substituting the expression for the rate matrix $\Rt$ in terms of state transition matrix $\Qt$ from~\Eqn{eqn:mdlm_rate_matrix} into~\Eqn{eqn:sedd_elbo} and switching from score-parameterization to the SUBS parameterization (\sec{subsec:subs}) yields the simplified NELBO for MDLM as given by~\Eqn{eqn:dif_loss_cont_subs}. We present the proof below. Recall that the term $\langle \mathbf{a}, \mathbf{b} \rangle$ denotes the dot product of two vectors $\mathbf{a}$ and $\mathbf{b}$. 
+When $ \mathbf{a}$ and $\mathbf{b}$ represent two \textit{one-hot} vectors, this quantity evaluates to $1$ if $\mathbf{a} = \mathbf{b}$ and $0$ otherwise. 
+
+\paragraph{Proof.} Recall that for absorbing state diffusion, $\y$ takes only two possible values, i.e., $\y \in \{\x, \m\}$. Thus, we expand~\Eqn{eqn:sedd_elbo} as follows:
+\begin{align}\label{eqn:sedd_elbo_masked_partial}
+    & \mathbb{E}_{t \in [0, 1], \y \sim q_t(. | \x)} \Bigg[
+        \langle \y, \x \rangle \left[
+            \sum_{\y' \neq \x} \Rt(\x, \y') \left(
+                \sedd(\x)_{\y'}
+                - \frac{q_t(\y'|\x)}{q_t(\x | \x)}\log \sedd(\x)_{\y'}
+                + K\left(\frac{q_t(\y'|\x)}{q_t(\x | \x)}\right) 
+                \right) \right] \nonumber \\
+    & \hspace{2.4cm} + \langle \y, \m \rangle \left[
+            \sum_{\y' \neq \m} \Rt(\m, \y') \left(
+                \sedd(\m)_{\y'}
+                - \frac{q_t(\y'|\x)}{q_t(\m | \x)}\log \sedd(\m)_{\y'}
+                + K\left(\frac{q_t(\y'|\x)}{q_t(\m | \x)}\right) 
+                \right) \right]  \Bigg]\nonumber \\
+    & \text{\footnotesize $\because \Rt(\x,\y' \neq \x) = 0$ from~\Eqn{eqn:mdlm_rate_neq_x_m}, we get:} \nonumber \\
+    & = \mathbb{E}_{t \in [0, 1], \y \sim q_t(. | \x)}
+        \langle \y, \m \rangle \left[
+            \sum_{\y' \neq \m} \Rt(\m, \y') \left(
+                \sedd(\m)_{\y'}
+                - \frac{q_t(\y'|\x)}{q_t(\m | \x)}\log \sedd(\m)_{\y'}
+                + K\left(\frac{q_t(\y'|\x)}{q_t(\m | \x)}\right) 
+                \right) \right] \nonumber \\
+    & \text{\footnotesize Substituting $\Rt(\m, \y'\neq\m)$ from~\Eqn{eqn:mdlm_rate_mask}, we get:} \nonumber \\
+    & = \mathbb{E}_{t \in [0, 1], \y \sim q_t(. | \x)}
+        \langle \y, \m \rangle \left[
+            \sum_{\y' \neq \m} - \frac{\dat}{\at} \left(
+                \sedd(\m)_{\y'}
+                - \frac{q_t(\y'|\x)}{q_t(\m | \x)}\log \sedd(\m)_{\y'}
+                + K\left(\frac{q_t(\y'|\x)}{q_t(\m | \x)}\right) 
+                \right) \right] \nonumber \\
+    & = \mathbb{E}_{t \in [0, 1], \y \sim q_t(. | \x)}
+        \langle \y, \m \rangle \left[
+            - \frac{\dat}{\at} \left(
+                \underbrace{\sum_{\y' \neq \m} \sedd(\m)_{\y'}}_{\textbf{Term 1}}
+                - \underbrace{\sum_{\y' \neq \m} \frac{q_t(\y'|\x)}{q_t(\m | \x)}\log \sedd(\m)_{\y'}}_{\textbf{Term 2}}
+                + \underbrace{\sum_{\y' \neq \m} K\left(\frac{q_t(\y'|\x)}{q_t(\m | \x)}\right)}_{\textbf{Term 3}}
+                \right) \right]
+\end{align}
+
+\paragraph{Term 1:} 
+\begin{align}\label{eqn:subs_score_property}
+    & \sum_{\y \neq \m} \sedd(\m)_\y \nonumber \\
+    & \text{\footnotesize Using~\Eqn{eqn:subs_score}, we get,} \nonumber \\
+    & = \sum_{\y \neq \m} \frac{\at }{1 - \at} \langle \denoise(\m, t), \y \rangle \nonumber \nonumber \\
+    & = \frac{\at }{1 - \at} \sum_{\y \neq \m}  \langle \denoise(\m, t), \y \rangle \nonumber \\
+    & \text{\footnotesize “zero-masking probability” in~\sec{subsec:subs} $\implies \sum_{\y \neq \m}  \langle \denoise(\m, t), \y \rangle = 1$; hence,} \nonumber \\
+    & = \frac{\at}{1 - \at} 
+\end{align}
+
+
+\paragraph{Term 2:} 
+\begin{align}\label{eqn:sedd_elbo_masked_partial_term1}
+        & \sum_{\y' \neq \m} \frac{q_t(\y'|\x)}{q_t(\m | \x)}\log \sedd(\m)_{\y'} \nonumber \\
+        & = \frac{q_t(\x|\x)}{q_t(\m | \x)}\log \sedd(\m)_{\x}
+        + \sum_{\y' \not \in \{\m, \x\}} \frac{q_t(\y'|\x)}{q_t(\m | \x)}\log \sedd(\m)_{\y'}\nonumber \\
+        & \text{\footnotesize $\because q_t(\y' | \x)=0$ for $\y' \not \in \{\x, \m\}$ from~\Eqn{eqn:interpolating_forward}) we get:} \nonumber \\
+        & = \frac{q_t(\x|\x)}{q_t(\m | \x)}\log \sedd(\m)_{\x} \nonumber \\
+        & \text{\footnotesize Using~\Eqn{eqn:interpolating_forward}, we get:} \nonumber \\
+        & = \frac{\at}{1 - \at}\log \sedd(\m)_{\x} \nonumber \\
+        & \text{\footnotesize Using~\Eqn{eqn:subs_score}, we get:} \nonumber \\
+        & = \frac{\at}{1 - \at}\log \left[ \frac{\at}{1 - \at} \langle \denoise(\m, t), \x \rangle \right] \nonumber \\
+        & = \frac{\at}{1 - \at}\log \frac{\at}{1 - \at}
+        + \frac{\at}{1 - \at}\log \langle \denoise(\m, t), \x \rangle
+\end{align}
+
+\paragraph{Term 3:}
+\begin{align}\label{eqn:sedd_elbo_masked_partial_term2}
+    & \sum_{\y' \neq \m} K\left(\frac{q_t(\y'|\x)}{q_t(\m | \x)}\right) \nonumber \\
+    & = \sum_{\y' \neq \m} \left[\frac{q_t(\y'|\x)}{q_t(\m | \x)} \log \frac{q_t(\y'|\x)}{q_t(\m | \x)} - \frac{q_t(\y'|\x)}{q_t(\m | \x)} \right]  \nonumber \\
+    & = \frac{q_t(\x|\x)}{q_t(\m | \x)} \log \frac{q_t(\x|\x)}{q_t(\m | \x)} - \frac{q_t(\x|\x)}{q_t(\m | \x)}  + \sum_{\y' \not \in \{\x, \m\}} \left[\frac{q_t(\y'|\x)}{q_t(\m | \x)} \log \frac{q_t(\y'|\x)}{q_t(\m | \x)} - \frac{q_t(\y'|\x)}{q_t(\m | \x)} \right]  \nonumber \\
+    & \text{\footnotesize $\because q_t(\y' | \x)=0$ for $\y' \not \in \{\x, \m\}$, we get,}  \nonumber \\
+    & = \frac{q_t(\x|\x)}{q_t(\m | \x)} \log \frac{q_t(\x|\x)}{q_t(\m | \x)} - \frac{q_t(\x|\x)}{q_t(\m | \x)} \nonumber \\
+    & \text{\footnotesize Substituting the values using~\Eqn{eqn:interpolating_forward}, we get:}\nonumber \\
+    & = \frac{\at}{1 - \at} \log \frac{\at}{1 - \at} - \frac{\at}{1 - \at}
+\end{align}
+
+Substituing~\Eqn{eqn:subs_score_property},~\Eqn{eqn:sedd_elbo_masked_partial_term1}, and~\Eqn{eqn:sedd_elbo_masked_partial_term2} in~\Eqn{eqn:sedd_elbo_masked_partial} we get,
+\begin{align}\label{eqn:eqn:sedd_elbo_masked}
+    & \mathbb{E}_{t \in [0, 1], \y \sim q_t(. | \x)}
+        \langle \y, \m \rangle \Bigg[- \frac{\dat}{\at} \Bigg(
+        \cancel{\frac{\at}{1 - \at}
+        - \frac{\at}{1 - \at}\log \frac{\at}{1 - \at}}
+        - \frac{\at}{1 - \at}\log \langle \denoise(\m, t), \x \rangle \nonumber \\
+    & \hspace{4.5cm} + \cancel{\frac{\at}{1 - \at} \log \frac{\at}{1 - \at} - \frac{\at}{1 - \at}}
+        \Bigg) \Bigg] \nonumber \\
+    & = \mathbb{E}_{t \in [0, 1], \y \sim q_t(. | \x)}
+        \langle \y, \m \rangle \left[- \frac{\dat}{\at} \left(
+        - \frac{\at}{1 - \at}\log \langle \denoise(\m, t), \x \rangle
+        \right) \right]  \nonumber \\
+    & = \mathbb{E}_{t \in [0, 1], \y \sim q_t(. | \x)}
+        \langle \y, \m \rangle \left[\frac{\dat}{1 - \at}\log \langle \denoise(\m, t), \x \rangle \right] \nonumber \\
+    & \text{\footnotesize Under the \method{} parameterization, $\log \langle \xapprox, \x \rangle = 0$ when $\z_t = \x$; hence $\langle \y, \m \rangle$ can be dropped:} \nonumber \\
+    & = \boxed{\mathbb{E}_{t \in [0, 1], \y \sim q_t(. | \x)}
+         \left[\frac{\dat}{1 - \at}\log \langle \xapprox, \x \rangle \right] }
+\end{align}
+This concludes the proof.
+
+
+
+
+
+
+
+
+
+
+
+\section{Experimental details}
+
+\subsection{Likelihood Evaluation}\label{supp:sec:likelihood-eval}
+We use a single monte-carlo estimate for $t$ to evaluate the likelihood. The low discrepancy sampler~\Eqn{supp:sec:low_discrepancy_sampler} plays a key role in reducing the variance of the estimate as seen in~\tab{tab:lm1b-ablation}.
+
+\subsection{Avg. Number of Tokens seen}\label{supp:sec:avg_tokens_seen}
+
+Given \texttt{training\_steps}, \texttt{batch\_size}, \texttt{context\_length}, the number of tokens seen by the AR model is given as:
+\begin{align}
+    \texttt{training\_steps} \times \texttt{batch\_size} \times \texttt{context\_length}.
+\end{align}
+However, this expression doesn't hold for a diffusion model, since at each training step, a fraction of the input tokens are masked before being fed to the model. Let $p_m$ be the probability of a token being masked at a timestep $t$. For the log-linear schedule in our experiments, $p_m=t$. Thus, the expected number of tokens seen by the diffusion model is: 
+\begin{align}\label{supp:eqn:diff_tokens}
+    & \mathbb{E}_{t \sim \mathcal{U}[0, 1]} [\texttt{training\_steps} \times \texttt{batch\_size} \times \texttt{context\_length} \times p_m] & \nonumber \\
+    & = \texttt{training\_steps} \times \texttt{batch\_size} \times \texttt{context\_length} \times \mathbb{E}_{t \sim \mathcal{U}[0, 1]} [p_m] & \nonumber \\
+    & = \texttt{training\_steps} \times \texttt{batch\_size} \times \texttt{context\_length} \times \mathbb{E}_{t \sim \mathcal{U}[0, 1]} [t] & \text{\footnotesize $\because p_m = t$}\nonumber \\
+    & = \texttt{training\_steps} \times \texttt{batch\_size} \times \texttt{context\_length} \times 0.5. & \text{\footnotesize $\because \mathbb{E}_{t \sim \mathcal{U}[0, 1]} [t] = 0.5$}
+\end{align}
+
+\paragraph{LM1B.} Following~\citep{austin2021structured, lou2023discrete, he2022diffusionbert}, we train \algo{} for 1M training steps with a \texttt{batch\_size} = 512, and a context length of 128. Like~\citep{lou2023discrete} we use a log-linear schedule and hence the number of tokens seen by our model is $\approx 33$B~\Eqn{supp:eqn:diff_tokens}. Similarly, \algo{} trained for 10M steps, saw 327B tokens in expectation. The corresponding AR baseline was trained for 0.5M and 5M steps to ensure a similar number of tokens was seen. 
+
+\paragraph{\owt{}.} We train SEDD and \algo{} for 1M training steps with a \texttt{batch\_size} = 512, \texttt{context\_length} = 1024, and log-linear schedule. Hence, these models saw  262B tokens during training. Similarly, the AR model saw the same number of tokens when trained for 0.5M steps with the same \texttt{batch\_size} and  \texttt{context\_length}.
+
+\subsection{Low discrepancy sampler}
+\label{supp:sec:low_discrepancy_sampler}
+To reduce variance during training we use a low-discrepancy sampler, similar to that proposed in~\citet{kingma2021variational}. 
+Specifically, when processing a minibatch of $N$ samples, instead of independently sampling $N$ from a uniform distribution, we partition the unit interval and sample the time step for each sequence $i \in \{1,\ldots,N\}$ from a different portion of the interval $t_i \sim U[\frac{i - 1}{N}, \frac{i}{N}]$.
+This ensures that our sampled timesteps are more evenly spaced across the interval $[0, 1]$, reducing the variance of the ELBO.
+
+
+\subsection{Language Modeling}
+\label{appendix:hyperparameters:lm}
+For our forward noise process, we use a log-linear noise schedule similar to~\citet{lou2023discrete}.
+
+We detokenize the One Billion Words dataset following \citet{lou2023discrete}, whose code can be found \href{https://github.com/louaaron/Score-Entropy-Discrete-Diffusion/blob/main/data.py}{here}\footnote{https://github.com/louaaron/Score-Entropy-Discrete-Diffusion/blob/main/data.py}.
+We tokenize the One Billion Words dataset with the \texttt{bert-base-uncased} tokenizer, following \citet{he2022diffusionbert}. We pad and truncate sequences to a length of 128.
+
+We tokenize OpenWebText with the \texttt{GPT2} tokenizer. We do not pad or truncate sequences -- we concatenate and wrap them to a length of 1,024. When wrapping, we add the \texttt{eos} token in-between concatenated. We additionally set the first and last token of every batch to be \texttt{eos}.
+Since OpenWebText does not have a validation split, we leave the last 100k docs as validation.
+
+We parameterize our autoregressive baselines, SEDD, and MDLM with the transformer architecture from \citet{lou2023discrete}. We use 12 layers, a hidden dimension of 768, 12 attention heads, and a timestep embedding of 128 when applicable. Word embeddings are not tied between the input and output.
+
+We use the AdamW optimizer with a batch size of 512, constant learning rate warmup from 0 to a learning rate of 3e-4 for 2,500 steps. We use a constant learning rate for 1M, 5M, or 10M steps on One Billion Words, and 1M steps for OpenWebText. We use a dropout rate of 0.1.
+
+\subsection{Zeroshot Likelihood}
+We evaluate zeroshot likelihoods by taking the models trained on OpenWebText and evaluating likelihoods on the validation splits of 7 datasets: Penn Tree Bank (PTB; \citet{marcus1993building}), Wikitext \citep{merity2016pointer}, One Billion Word Language Model Benchmark (LM1B; \citet{chelba2014billion}), Lambada \citep{paperno-EtAl:2016:P16-1}, AG News \citep{Zhang2015CharacterlevelCN}, and Scientific Papers (Pubmed and Arxiv subsets; \citet{Cohan_2018}).
+We detokenize the datasets following \citet{lou2023discrete}.
+For the AG News and Scientific Papers (Pubmed and Arxiv), we apply both the Wikitext and One Billion Words detokenizers.
+Since the zeroshot datasets have different conventions for sequence segmentation, we wrap sequences to 1024 and do not add \texttt{eos} tokens in between sequences.
+
+\subsection{Representation Learning}
+\label{appendix:hyperparameters:rep}
+Following \citet{devlin2018bert}, we evaluate on all GLUE tasks \citep{wang2018glue}, but exclude WNLI.
+
+We pre-train a MosaicBERT model on C4 \citep{t5} for 70k steps, corresponding to 36B tokens. We pad and truncate the data to 128 tokens using the \texttt{bert-base-uncased} tokenizer.
+
+MosaicBERT \citep{portes2024mosaicbert} has a similar architecture to \texttt{bert-base-uncased} and has 137M parameters, 12 layers, 12 attention heads, a hidden dimension of 768, an intermediate size of 3072, and ALiBi attention bias \citep{press}.
+
+For pre-training, we use the following hyperparameters: A global batch size of 4096 with gradient accumulation, a learning rate of 5e-4, linear decay to 0.02x of the learning rate with a warmup of 0.06x of the full training duration, and the decoupled AdamW optimizer with 1e-5 weight decay and betas 0.9 and 0.98.
+
+For diffusion fine-tuning we use AdamW with a warmup of 2,500 steps from a learning rate of 0 to 5e-5, betas 0.95 and 0.999, and batch size 512. We train for 5k steps total, corresponding to 32M tokens.
+
+For GLUE evaluation, we use the HuggingFace script found \href{https://github.com/huggingface/transformers/tree/main/examples/pytorch/text-classification}{here}\footnote{https://github.com/huggingface/transformers/tree/main/examples/pytorch/text-classification}. We use the default parameters for all datasets, except for a batch size of 16, which we found helped with smaller datasets. This includes the default of 3 epochs for all datasets and learning rate of 2e-5.
+
+\subsection{Diffusion DNA Models}
+\paragraph{Dataset}
+We pre-train the Caduceus MLM~\citep{schiff2024caduceus} on the HG38 human reference genome~\citep{hg38}. Following~\citet{schiff2024caduceus}, we use character- / base pair-level tokenization. The dataset is based on the splits used in~\citet{avsec2021effective}: the training split comprises of 35 billion tokens covering the human genome. This consists of 34,021 segments extended to a maximum length of 1,048,576 (220 segments). We maintain a constant $2^{20}$ tokens per batch. For the Genomics Benchmark tasks, we use 5-fold cross-validation where we split the training set into 90/10 train/validation splits.
+
+\paragraph{Architecture}
+\label{apepndix:diffusion-dna-setup}
+The Caduceus MLM uses as a backbone a bi-directional variant of the data-dependent SSM Mamba block proposed in~\citet{gu2021efficiently}. This architecture is ideal as it contains inductive biases that preserve reverse complement (RC) equviariance, respecting the inherent symmetry of double-stranded DNA molecules~\citep{mallet2021reverse, schiff2024caduceus, zhou2022towards}.
+
+\paragraph{Training details}
+All models are pre-trained on 10B tokens (10K steps) and fine-tuned on a generative objective for an additional 50B tokens (50K steps). We use a global batch size of 1024 for a context length of 1024 tokens. Downstream task fine-tuning is performed for 16K steps (~1B tokens).
+
+For performing Caduceus MLM pre-training, we follow~\citet{schiff2024caduceus} for the model size configuration, and hyperparameter selection. For pre-training, we use a fixed 15\% mask rate as done in~\citet{devlin2018bert}. Of the 'masked' tokens, 80\% are replaced with \mask, 10\% are replaced with a random token from the vocabulary, and 10\% are left unchanged.
+
+For fine-tuning all Mamba-based models (including Caduceus) on diffusion objectives, we lower the learning rate from 8e-3 to 1e-3. For fine-tuning HyenaDNA~\citep{nguyen2024hyenadna}, we lower the learning rate from 6e-4 to 5e-5. Similar to~\citet{gu2021efficiently, schiff2024caduceus}, we found that Mamba-based models were robust to higher learning rates. We exclude timestep embeddings for all Diffusion DNA experiments, as we show it has minimal impact on generative performance (see Table \ref{tab:time-cond-abl},~\supp{app:time_cond-abl}).
+
+We perform downstream task fine-tuning on the final hidden state embedding from pre-training. We perform mean pooling across the sequence length,
+which may vary from 200 to approximately 2,000 bps. We report the mean and $\pm$ on max/min classification accuracy over 5-fold cross-validation (CV) using
+different random seeds, with early stopping on validation accuracy. For each task, we do a hyperparameter sweep over batch size and learning rate and report the values of the 5-fold CV for the best configuration.
+
+\paragraph{Genomic Benchmark Task Distributions}
+We use a subset of the Genomic Benchmark tasks with an emphasis on tasks from Human data. The positive samples for each dataset were generated by selecting samples that were annotated, either computationally or experimentally, in previous work (e.g enhancers, promoters, open chromatin regions (OCR)) \cite{grevsova2023genomic}. These annotations each correspond to subsets of the genome of varying sizes that may exhibit different distributions of DNA than those observed globally over the reference genome.
+Due to this, the observed dataset may have a different distribution than the data used for pre-training and calculating perplexity. This might in turn lead to a case where perplexity and downstream performance may not necessarily correlate.   
+
+
+
+
+
+
+
+
+
+\section{Additional Experiments}
+
+\subsection{Noise schedule parameterization}\label{sup:subsec:noise_schedule_variance}
+As described in~\sec{subsec:continuous_elbo}, the ELBO is invariant to the functional form of $\at$. To demonstrate this, we evaluate \algo{}, initially trained using a log-linear schedule on OWT, by replacing the noise schedule with various other noise schedules as mentioned below. Following prior works~\citep{austin2021structured, lou2023discrete, sohl2015deep}, we parameterize $\at = e^{-\sigma(t)}$, where $\sigma(t): [0, 1] \to \mathbb{R}^+$. Various functional forms of $\sigma(t)$ are listed below:
+
+\textbf{Log Linear~\citep{austin2021structured, lou2023discrete, sohl2015deep}.} The log linear schedule is given as:
+\begin{align}\label{supp:ns_log_linear}
+    \sigma(t) = - \log \; (1- t)
+\end{align}
+
+\textbf{Cosine Squared schedule~\citep{han2022ssd}.}
+The Cosine Squared schedule is given as:
+\begin{align}\label{supp:ns_cosine_squared}
+    \sigma(t) = - \log \; \text{cos}^2\left(\frac{\pi}{2}(1 - t)\right)
+\end{align}
+
+\textbf{Cosine schedule.}
+The Cosine schedule is given as:
+\begin{align}\label{supp:ns_cosine}
+    \sigma(t) = - \log \; \text{cos}\left(\frac{\pi}{2}(1 - t)\right)
+\end{align}
+
+\textbf{Linear.}
+The Linear schedule is given as:
+\begin{align}\label{supp:ns_linear}
+    \sigma(t) = \sigma_{\text{max}} t
+\end{align}
+where $\sigma_{\text{max}}$ is a very large number. In our experiments we set it to $10^8$.
+\subsubsection{ELBO Invariance}\label{supp:subsec:elbo_invariance}
+
+The function $\at$ is invertible due to the monotonicity assumption in \sec{sec:interpolating_diffusion}, and so we can perform the following change of variables in~\Eqn{eqn:dif_loss_cont_subs}:
+$\ns \equiv \log(1 - \at)$. Let $f:[0, 1] \to \mathbb{R}^{-}$ be a function such that $\ns = f(t)$.
+Note that $\at$ goes through a monotonic transformation to obtain $\ns$; hence, $\ns$ is also monotonic in $t$ since $\at$ is monotonic in $t$. This implies that the function $f$ is invertible. Let $t = f^{-1}(\ns)$. Then, we can we have the following diffusion loss:
+\begin{align}
+    \lossnelbo
+    & = \mathbb{E}_{q}\int_{t=0}^{t=1} \frac{\dat}{1 - \at} \log \xapproxum \d t & \nonumber \\
+    & = - \mathbb{E}_{q}\int_{t=0}^{t=1} \log \xapproxum \frac{\d}{\d t} [\log(1 - \at)] \d t & \nonumber \\
+    & = - \mathbb{E}_{q}\int_{t=0}^{t=1} \log \xapproxum \frac{\d}{\d t} [f(t)] \d t & \text{\footnotesize Substituting $f(t) = \log(1 - \at)$} & \nonumber \\
+    & = - \mathbb{E}_{q}\int_{\ns = -\infty}^{\ns = 0} \log \langle \x_{\theta}(\z_{f^{-1}(\ns)}, f^{-1}(\ns)), \x \rangle \d \ns & \text{\footnotesize Change of variables $\ns \equiv f(t)$} \nonumber \\
+    & = - \mathbb{E}_{q}\int_{\ns = -\infty}^{\ns = 0} \log \langle {\x}_{\theta}(\tilde{\z}_\ns, f^{-1}(\ns)), \; \x \rangle \d \ns & \text{\footnotesize $\tilde{\z}_\ns \equiv \z_{f^{-1}(\ns)}$} \nonumber \\
+    & = - \mathbb{E}_{q}\int_{\ns = -\infty}^{\ns = 0} \log \langle \tilde{\x}_{\theta}(\tilde{\z}_\ns, \ns), \; \x \rangle \d \ns & \text{\footnotesize $\tilde{\x}_{\theta}(\tilde{\z}_\ns, \ns) \equiv {\x}_{\theta}(\tilde{\z}_\ns, f^{-1}(\ns))$} 
+\end{align}
+This new formulation demonstrates that the diffusion loss is invariant to the functional form of $\at$.
+In~\tab{supp:tab:noise_schedule_variance}, we demonstrate empirically that noise schedules with different functional forms evaluate to the same Likelihood which is consistent with our theory.
+However, different schedules lead to different per data point variance. Notably, the log-linear schedule exhibits the lowest variance among all the noise schedules considered.%
+\begin{table*}[!h]
+  \caption{Likelihood in bits per dimension (BPD) for different noise schedules on \owt{} dataset, is reported along with the mean and variance associated with each noise schedule per data point. We empirically observe that noise schedules with different functional forms yield the same likelihood, consistent with our theory in~\sec{subsec:continuous_elbo}; however, different schedules result in different variances.}
+  \label{tab:var_ns}
+  \centering
+    \begin{tabular}{lcc}
+    \toprule
+    $\sigma(t)$ & Mean & Variance per datapoint \\
+    \midrule
+    Log Linear~\Eqn{supp:ns_log_linear}     & 3.30    & 1.81        \\
+    Cosine~\Eqn{supp:ns_cosine}         & 3.30    & 3.30        \\
+    Cosine Squared~\Eqn{supp:ns_cosine_squared} & 3.30    & 3.30        \\
+    Linear~\Eqn{supp:ns_linear}         & 3.30    & 7.57        \\
+    \bottomrule
+    \end{tabular}
+    \label{supp:tab:noise_schedule_variance}
+\end{table*}
+
+
+
+\subsection{Faster sampling with caching}\label{app:caching}
+In Figure \ref{tab:caching-wall-clock}, we compare the wall clock times of variaous methods: AR, SEDD, \algo{} with caching, and \algo{} without caching for generating 64 samples on a single GPU.
+When sampling in batches, a change of 1 token would necessitate a call to the denoising model.
+Therefore, smaller batch sizes have a lower likelihood of a token being unmasked.
+This might lead one to prefer generating samples in smaller batches, as opposed to using a larger batch size that fully saturates the GPU.
+\tab{tab:caching-wall-clock} shows that generating samples with a batch size of 1 and using caching is twice as fast as generating samples without caching while fully utilizing the GPU.
+In~\fig{fig:caching-wall-clock}, we observe that \algo{} without caching yields samples that consistently get better generative perplexity than SEDD. For $T=\{5k, 10k\}$, both SEDD and \algo{} get better generative perplexity than the AR model. 
+
+
+\begin{table}[!h]
+    \centering
+    \caption{Wall clock time reported in minutes to generate 64 samples on a single \texttt{A5000} GPU.}
+    \begin{tabular}{lcc}
+         ~                      &  $T=5k (\downarrow)$ & $T=10k (\downarrow)$\\
+         \toprule
+         SEDD & $85.3$& $155.2$\\
+         \algo{}  & $70.3$ & $127.9$ \\
+         \hspace{1em} + caching   &  $\mathbf{40.1}$ & $\mathbf{60.4}$\\
+         \bottomrule
+    \end{tabular}
+    \label{tab:caching-wall-clock}
+\end{table}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.8\textwidth]{figures/caching.pdf}
+    \caption{Generative perplexities across wall clock time for generating 64 samples on OWT using a single 32GB A5000 GPU are compared by varying $T\in\{100, 500, 1000, 5000, 10000\}$ in the reverse diffusion process. The samples are generated in mini-batches with a batch size of 16 for AR, SEDD, and \algo{} without caching, as it is the largest batch size that fits on this GPU. For \algo{} with caching, we vary the batch size.}
+    \label{fig:caching-wall-clock}
+\end{figure}
+
+\subsection{\oneb{} ablations}
+We assess the importance of our continuous-time framework by performing ablation on diffusion steps $T$. In Table~\ref{supp:fig:subs-ablation}, we compare NLL and PPL under continuous and discrete T in \algo{}. We find that NLL consistently decreases as $T \to \infty$.
+\begin{table}[!h]
+ \caption{Discrete vs continuous time evaluation for \algo{} w/o time-conditioning on OWT. \algo{} was trained with $T=\infty$. We report test perplexity for a discrete $T$.}
+ \label{supp:fig:subs-ablation}
+ \centering
+ \begin{tabular}{lc}
+   \toprule
+   T & PPL($\leq$) \\
+   \midrule
+   $\infty$ & \textbf{23.05} \\
+   \midrule
+   $10$ & $42.18$ \\
+   $20$ & $30.70$ \\
+   $50$ & $25.77$ \\
+   $100$ & $24.35$ \\
+   $200$ & $23.66$ \\
+   $500$ & $23.26$ \\
+   $1000$ & $23.15$ \\
+   \bottomrule
+ \end{tabular}
+\end{table}
+
+\subsection{Train NLL curves on OWT}\label{appsec:train_owt}
+In \Fig{fig:nll_owt}, we show that \algo{} achieves lower variance loss during training compared to a previous diffusion language model, SEDD. Training is performed over 1M steps on \owt{} (which corresponds to 524B tokens).
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.8\textwidth]{figures/owt_train_curve.pdf}
+  \caption{Train negative log-likelihood (NLL) curves across 1M gradient steps (524B tokens) on OpenWebText~\citep{Gokaslan2019OpenWeb}. NLL is logged every 1K steps without value smoothing.}%
+  \label{fig:nll_owt}
+\end{figure}
+
+\subsection{Time-conditioning ablation on \owt{}}\label{app:time_cond-abl}
+In Table \ref{tab:time-cond-abl}, we assess the importance of time conditioning in \algo{} on \owt{}. We observe that time-conditioning has minimal impact on perplexity. Training is performed over 1M steps on \owt{} (which corresponds to 524B tokens).
+
+\begin{table*}[h]
+  \caption{Ablation on time-conditioning in \algo{} on \owt{}.}
+  \label{tab:time-cond-abl}
+  \centering
+    \begin{tabular}{ll}
+    \toprule
+    Method & PPL \\
+    \midrule
+    \algo{} w/ time-conditioning         & 23.21        \\
+    \algo{} w/o time-conditioning & \textbf{23.05}        \\
+    \bottomrule
+    \end{tabular}
+\end{table*}
+
+
+\subsection{Unconditional Samples}
+Here, we present some unconditional samples generated by \algo{} trained on OWT with a context length of $L=1024$ for $T = \{1000, 10000\}$.
+\subsubsection{T = 1000}
+
+\paragraph{Example 1}
+{\fontfamily{qcr}\selectfont
+
+<|endoftext|> a 17-10 victory and a trip to the playoffs.
+
+The last wildcard seed: New York Jets, Houston and the last potable playoff spot. The last-second home wins: New Orleans and Carolina, 21-21.
+
+The Saints finish sixth with the highest regular season (42) NFC wins. They lost 14 of their 13 games in the conference playoffs.
+
+The Cardinals were in Group A in Round 1 with Game 2, Round 3, Round 4 and Quarter Game 5, but they made their last trip to the playoffs off North Carolina on the road as even North Carolina.
+
+True to their reputation, the Cards swept the Saints in the first round, but knocked it out at home. No Panthers went to the playoffs more than the Saints.
+
+Don Jean no longer is the South Carolina Panther.
+
+The Cardinals thought that provided that he had a chance to be an NFL player.
+
+"I did," said defensive end Lorenzo Williams with a laugh as he exited his car at the airport. "Also, I won that game."
+
+KC win brings Carson back home.
+
+Griffin made promise on Sunday to never exactly give up the dunk. Although he failed to score 40 points in the playoffs, he has had better luck in them this year.
+
+With turnovers and fumbles returning, he has to play out because the team doesn't trust him. He's long years of injuries, turnovers and calls because he knows he can play that way for everybody.
+
+Griffin is no stranger to Saints fans.
+
+"Players want him to know them," someone from South Carolina said after coming out against the Panthers — in their best home home Week 7 win Sunday — in an 11-9 rout. South Carolina did win its final three and passed the Saints, 24-1.
+
+Although the Cardinals are in the South, they am a step behind.
+
+They still have little time left to take down the West Coast wild card. There is no chance they get another victory.
+
+The West was out by Beshear in their first round games last season, losing by 63 to the 49ers.
+
+The outcome will be tough.
+
+"Now we're so close, let's figure out the time to win," Brees said. "We still have a few games left; I'm glad about that."
+
+South Carolina takes the revenge.
+
+When asked about his second time since Super 4, Brees shot back that he understood.
+
+"You can doubt the answer but I think that was a no-brainer. In time, you try to prove an answer wrong," Brees said. "I think his ability will be as cool as Julio Jones' ability, but having that time [out] to my season was difficult overall. I did what I was expecting to do. Hopefully they'll tell me to try again."
+
+After their late win, the NFL calls the Saints reschedule'must try.'
+
+"Because Saints," those who am there still say it, "focus on defense and, offense is defense."
+
+ESPN said Saints's star receiver Dashon Jeffishard, turning heads on long passes and connecting with open defenders, already had their 20-yard overall score from the field. When Jeffishard finished with three passing he set up. He obviously had no difference; it was his first snap-off.
+
+With his changes in his starting lineup, Brees was just hoping they had little to prove against Carolina over the weekend.
+
+"I felt like we didn't have quite enough focus on and there was so puny coverage that I wanted more of our guys at the same position so we'd up our game," he said.
+
+Brees said South Carolina was well at linebacker.
+
+"If that's part of it, if you're going to try and stay with what you're going [out with]. What'd you want? Smart play," Brees said. "What would you say? That you're always ready to play. So you're going out there strong and ready to go to play football."
+
+That said, New Orleans was damned shy when it came to Carolina.
+
+"My guys admit to feeling it a little bit [Sunday but] I say to them that they always knew, 'I don't think that was necessarily how I would beat you, that will give them their confidence," Brees said.
+
+"It was really hard because I've obviously learned a lot of detail about how to deal with everyone and as hard as I have to be, I also feel part of the stuff that they've been through on the team, like they're still going to go through things they know are somewhat right, but they feel a lot of pressure so it's got to be important to get it right now to get it in the future."
+
+Could all ask for more roses?
+
+Let's just take a slip, South Carolina, and face the NFC<|endoftext|>
+
+}
+
+\paragraph{Example 2}
+{\fontfamily{qcr}\selectfont
+<|endoftext|> Memorial Hospital.
+
+Valia and Hill had been working with the Coast Guard in response to public questions, and when they were reached couldn't comment on the new information, Chapman said.
+
+People referred to Valia during the years from Hill's family in Ants, and she cut in contact with their family and friends in 2016.
+
+"Each day they stepped on the bus, when they left they saw me on TV," she said.
+
+After separating from their family recently, Valia, 32, also moved into a Richmond house last October.
+
+Read or Share this story: http://usat.ly/1NNC4zY<|endoftext|>CIVIL C. "Marky" Hogan has been charged with homicides with a few days remaining after the April 2 purdade high school shooting where an undercover medical examiner and two other state and Illinois police officers was using heroin to go see a therapist.
+
+DICEZ TV's Zach Putler reported Tuesday that Hogan was charged with felony drug possession by the Chicago Police Department at the preliminary hearing on Monday. Putler interviewed on Monday. Authorities could offer a limit until Cook County takes Tuesday afternoon or they have to assign plea agreements.
+
+Dogan said in a news conference he made during a conference call Wednesday in Chicago that he believes the people who used him as a legal tool in the killing and fired employees hired for suffering also participated.
+
+He said the couple's request to an attorney Monday will let the charges finally play out. Their lawyer did not respond Wednesday.
+
+Dogan would not give away to possibility that he speculated in a statement that he would escape and return unless shot.
+
+Chicago police initially said the other drug charges failed to raise enough evidence to establish why the killers were charged last year, raising the possibility that the drug mix contributed to a reason for their arrest. But a new statement was made Tuesday by a man who worked as the shooter in his unit on campus, and suggested the charges might be related to his work at university supervision.
+
+His attorney and the university's president last week signaled that the incident of the bat gun was not a police investigation at Wednesday's conference.
+
+Michael Durin, Illinois State University spokesman said he did not meet with university officials at the conference, and that university officials don't have any updates yet either.
+
+"The fact that the Defendants were charged is a major factor in why it would get this much attention," the university spokesperson said. "Given that all the matters are not being resolved for months and months, any new specific information and other concerns they may be tasked with investigating now are understandable."
+
+After city police began looking for evidence in connection to Hogan's April shooting, Durin said he had not noticed it until the Chicago Police Department found a person who was producing a bind gun on Illinois State campus. That same department found that 14 officers shot and were injured during a standoff, but it led to the launch of a combination of unrelated and related investigations leading to homicides charges in May 2015.
+
+A memo from special school investigators suggests it had identified the drug fentanyl, and says the department had described the individual-oriented and inconsistent use of the gun, as well as the substance administered by CODC.
+
+Dogan's allegations claim that a 2009 police gravesite package showed water running over campus and shows that the dental show photos of supposed victims were reinterpreted.
+
+David Mann, a member of the Police Department, said he spoke exclusively to News 1 on condition of anonymity because university officials can't review documents immediately, and university officials had to change information that had been a consideration.
+
+"We didn't change our information until he personally told the drug overdose problem," he said. "He said that drug dealing wasn't really a focal point."
+
+He however, in a May 15 statement, also was "proleased" with university and state officialsin the U.S. Attorney's Office. "We do not have any way to estimate the crime syndicate, given that the finding in the case does not preclude a separate review of standard CPD policy directed at any school employee, and whether that employee worked or went out of work," Mann said.
+
+The lawsuit alleges that donations from a full visit with Hogan's workers and thousands of dollars, spent on gift cards, cigars, stock tickets to trips across the country, as well as other financial accounts and income from social members of former employees, were missing from buyers bought in stock.
+
+Both employees and co-participants remain employed at the university.
+
+On the Illinois StateUniversity Facebook page<|endoftext|>Image Steve Healey, the Cook Electronics Co. Ltd., general manager of Aug. 8-Feb. 16 at a recent internal session meeting (see link) held in The Apple Building in London. This July 1939 photo shows Peggy Deaver in 1986. (Photo courtesy the Cook Electronics Co. Ltd., displayed here under G. Healey in prison dress.)<|endoftext|>Steve GIRO's H-P<|endoftext|>
+
+}
+
+
+\subsubsection{T =10000}
+\paragraph{Example 1}
+{\fontfamily{qcr}\selectfont
+<|endoftext|> has been presenting a number of temporary measures to help help resolve a crisis.
+
+The last crisis was like this, but we have to resolve it at the specified level; we have to stay low. The people of Greece will be interested in the effectiveness of the measures. They will not only manage these measures, but also they will help in order to cope with the problems of the fiscal stability.
+
+However, we do not want to dispose assets for the treasury. This also, so we will work on developing the national economy, and also paying on the national debt.
+
+This affects the national incomes
+
+So, as of 2007-2011, we use the government's temporary measures as a measure, helping resolve the crisis. In addition, we are able to pay for the borrowing costs. Additionally, we pay \$440 billion to settle debt issues, which can never be settled by default in a country.
+
+These temporary measures will be aimed on several fronts, because the government will have three different partners in the system, in my right.
+
+Firstly, we will be allowed to borrow a lot more upon the addition of the emergency measures and these temporary measures will help provide for the repayment of our debts before we are forced into a crisis as a result of our borrowing bills. Secondly, in the case of this, we will have resort to temporary measures in the revenue budget for Greece. The budget costs the government another \$5.2 billion a year.
+
+So what you propose - if it happens again, does this mean that, since 2010, will you resolve the deficits which will occur on the basis of what we already have?
+
+The fiscal situation
+
+We would be able to settle our debts by the end of June which is the end. That said, we are taking our part as one of the most important countries in Europe, not only to make a proper transfer of the money but also to rely on it in the economy. However, first of all, we cannot achieve this on a day-to-day basis.
+
+It is still true that we have decided to be able to deal with the economic situation of the country, but there might be another change in the fiscal situation, and therefore, we will try to negotiate on the situation at the end of June and over the summer.
+
+The changes in the fiscal situation would be up to the parliament of management, bureaucrats, judges and a legitimate parliament of Greece.
+
+Is the government planning to talk about thethe 'temporary measures' of Greece?
+
+We will continue the process to operate through the temporary measures. This is not a temporary measure at this point, because after a crisis, not thereyet at crisis level, you can still have enough investment purchases until the end of the month.
+
+Again the government decided to create a temporary measure and now it depends upon a particular event, such as that there's another liquidity crunch. It is better that the government and the authorities decided to create a temporary measure effective in June at fair sum monthly bond rates.
+
+The temporary measures will also enhance the government's economic status, especially when following the measures at the end of the month.
+
+Temporary measures is a real tool for growth, not just for the economy.
+
+Knowing that there are several measures in place to increase our supply, for example, the level offor profit on public sector enterprises is certain, under all of these temporary measures the increases in output, after that, will increase the external demand and the internal demand.
+
+We will be able to create the demand, and also strengthen the government's credibility through fiscal organization. What is important here, here is that we will apply these measures to our reserves, and at the same time, we apply these measures to the debt level, which will also be the aim of debt-free Greece.
+
+So, first of all, everything is certain ofwhat continues to be collected by the government. Given the situation and after the release of the last data on October 16, you also recognize that this will not be any kind of non-payment.
+
+In the case of the payment against the equipment, we will be able to manage with the measures.
+
+What does government expect in its plans to create a fiscal consolidation for the public sector and the new budget.
+
+Regarding this is the temporary measure, we will be able to cope with the troubled finances. However, I do not think it is any measure which threatens the fiscal stability of the economy. However, that is not a temporary measure, a permanent measure.
+
+On the other hand, there will be our ongoing work on construction in the ministry. If this falls, we will continue work on job creation, the expansion of the economy.
+
+Also, also the government mentioned the new government reforms, which increased labor hours for the employees, which will further the economic growth, and the second aspect of budget as well and this is government welfare, which will improve the quality of life. We will<|endoftext|>}
+
+\paragraph{Example 2}
+{\fontfamily{qcr}\selectfont
+<|endoftext|> him. He said: “What are you doing?”
+
+I hesitated before answering. “Boy, this is so exciting. You need a better girl. Is she?”
+
+And I said, “You don’t have a brain. You have no brain anymore.”
+
+After a minute, he had walked back and said on his own, working through that, he thought he had got himself going in a new direction.
+
+He could’ve been a better boy in the first three years.
+
+“You’ll only have once before it starts.”
+
+MVP
+
+The story is always, “That’s what the other guy has to do.” He was the guy who had to do anything. He had to reason with school officials. My cousin mentioned to me that some of my friends almost doubled over at one meeting.
+
+I’d picked up a lot of the money I owed him from high people in me; he liked my grades. Drop-outs didn’t consider me high enough to let me go hang out. He hung up when I challenged him after practice to show a new talk. He started making, and, quite, never
+
+I first saw him C. morning, in the sixth grade class. He wouldn’t hang up with him on point at team meetings. He started talking about things about me: “I’m an M, I’ll get an A. Tonight.” Having had that conversation over lunch, my heart touched mine with pride. He came, my boy. Now he looks like he’s going back to school. I don’t know if he’s going to sue. Let’s just have a two-bedroom apartment, a \$500-dollar condo for renting, and a pool. And then he was back.
+
+That was a part of my life as I think about it. It was the school year.
+
+I never saw a guy come up at the locker room and show a new talk. That day one day, I told the high school, “We’ll show up one day right here, we can have a little fun,” and after this, I remember a small handful of the boys made friends, and they never, ever showed up for a new talk.
+
+I call them “M’s kids. I always remember him, I remember his ass up his ass, getting ready for a freshman orientation out there. He’ll show everything.
+
+He’ll show if I’m freshman, I’ll act I was going to play junior. In a few years I’ll try it, then he’ll make sure he’s going to judge me. He will come over to me one day.
+
+Then one day, the senior class was sitting on the bench, pressing his ball on the floor of the locker room, the referee was just standing the knelt it down.
+
+And when he heard about that, another boy, three of his friends, and one of his cousins were on the other side of the room. The boys’ class was filling in with his new brother and his new cousin and his new M.M’s player.
+
+The senior class watched me walk me through the chair to the bench. Everyone passed by the boy. Just on his toes on a foot, too.
+
+He [and a girl] passed over his head and, as I looked at them, he carried me into the locker room. And the biggest part of the story, was a mistake.
+
+With his elbows out, he pulled me down on my shoe, my other, sort of a- don’t know what they were; palebelly somethings, like bleeding very much, or on little toes. He was up on the stairs and everybody watches, with men and high school kids, who saw him in the locker room. And he caught a breath. Then his old man approached me and, disappeared into the middle of the room. He took off his vest, fast enough as to herd him into the locker room. I walked into the room and read him little cards with my own eyes to make notes, to pull him under my shoes.
+
+I told them: “Listen, because I say this today, when you talk to ’em today, “Just make sure you talk is more than you’ll show. He’s just listening to me, and he’s telling me I’m going to be there for him.”
+
+I’m always the one who wants to do something important about you than I show up. I walk around and ask, I want a message from you, “Keep it going. It<|endoftext|>
+
+}
+
+
+\newpage
+
+\section*{NeurIPS Paper Checklist}
+
+The checklist is designed to encourage best practices for responsible machine learning research, addressing issues of reproducibility, transparency, research ethics, and societal impact. Do not remove the checklist: {\bf The papers not including the checklist will be desk rejected.} The checklist should follow the references and follow the (optional) supplemental material.  The checklist does NOT count towards the page
+limit. 
+
+Please read the checklist guidelines carefully for information on how to answer these questions. For each question in the checklist:
+\begin{itemize}
+    \item You should answer \answerYes{}, \answerNo{}, or \answerNA{}.
+    \item \answerNA{} means either that the question is Not Applicable for that particular paper or the relevant information is Not Available.
+    \item Please provide a short (1–2 sentence) justification right after your answer (even for NA). 
+\end{itemize}
+
+{\bf The checklist answers are an integral part of your paper submission.} They are visible to the reviewers, area chairs, senior area chairs, and ethics reviewers. You will be asked to also include it (after eventual revisions) with the final version of your paper, and its final version will be published with the paper.
+
+The reviewers of your paper will be asked to use the checklist as one of the factors in their evaluation. While "\answerYes{}" is generally preferable to "\answerNo{}", it is perfectly acceptable to answer "\answerNo{}" provided a proper justification is given (e.g., "error bars are not reported because it would be too computationally expensive" or "we were unable to find the license for the dataset we used"). In general, answering "\answerNo{}" or "\answerNA{}" is not grounds for rejection. While the questions are phrased in a binary way, we acknowledge that the true answer is often more nuanced, so please just use your best judgment and write a justification to elaborate. All supporting evidence can appear either in the main paper or the supplemental material, provided in appendix. If you answer \answerYes{} to a question, in the justification please point to the section(s) where related material for the question can be found.
+
+ 
+
+
+
+\begin{enumerate}
+
+\item {\bf Claims}
+    \item[] Question: Do the main claims made in the abstract and introduction accurately reflect the paper's contributions and scope?
+    \item[] Answer: \answerYes{} %
+    \item[] Justification: Claims are addressed 
+
+\item {\bf Limitations}
+    \item[] Question: Does the paper discuss the limitations of the work performed by the authors?
+    \item[] Answer: \answerYes{}%
+    \item[] Justification: Our method under-performs compared to autoregressive models. We also discuss other limitations in the paper.
+
+\item {\bf Theory Assumptions and Proofs}
+    \item[] Question: For each theoretical result, does the paper provide the full set of assumptions and a complete (and correct) proof?
+    \item[] Answer: \answerYes{} %
+    \item[] Justification: They are in the proofs.
+    \item[] Guidelines:
+    \begin{itemize}
+        \item The answer NA means that the paper does not include theoretical results. 
+        \item All the theorems, formulas, and proofs in the paper should be numbered and cross-referenced.
+        \item All assumptions should be clearly stated or referenced in the statement of any theorems.
+        \item The proofs can either appear in the main paper or the supplemental material, but if they appear in the supplemental material, the authors are encouraged to provide a short proof sketch to provide intuition. 
+        \item Inversely, any informal proof provided in the core of the paper should be complemented by formal proofs provided in appendix or supplemental material.
+        \item Theorems and Lemmas that the proof relies upon should be properly referenced. 
+    \end{itemize}
+
+    \item {\bf Experimental Result Reproducibility}
+    \item[] Question: Does the paper fully disclose all the information needed to reproduce the main experimental results of the paper to the extent that it affects the main claims and/or conclusions of the paper (regardless of whether the code and data are provided or not)?
+    \item[] Answer: \answerYes{}
+    \item[] Justification: We provide all hyperparameters necesessary to reproduce the experiments and will provide code.
+
+
+\item {\bf Open access to data and code}
+    \item[] Question: Does the paper provide open access to the data and code, with sufficient instructions to faithfully reproduce the main experimental results, as described in supplemental material?
+    \item[] Answer: \answerNo{}%
+    \item[] Justification: We will release all code after the paper is accepted. The datasets are already public.
+    \item[] Guidelines:
+    \begin{itemize}
+        \item The answer NA means that paper does not include experiments requiring code.
+        \item Please see the NeurIPS code and data submission guidelines (\url{https://nips.cc/public/guides/CodeSubmissionPolicy}) for more details.
+        \item While we encourage the release of code and data, we understand that this might not be possible, so “No” is an acceptable answer. Papers cannot be rejected simply for not including code, unless this is central to the contribution (e.g., for a new open-source benchmark).
+        \item The instructions should contain the exact command and environment needed to run to reproduce the results. See the NeurIPS code and data submission guidelines (\url{https://nips.cc/public/guides/CodeSubmissionPolicy}) for more details.
+        \item The authors should provide instructions on data access and preparation, including how to access the raw data, preprocessed data, intermediate data, and generated data, etc.
+        \item The authors should provide scripts to reproduce all experimental results for the new proposed method and baselines. If only a subset of experiments are reproducible, they should state which ones are omitted from the script and why.
+        \item At submission time, to preserve anonymity, the authors should release anonymized versions (if applicable).
+        \item Providing as much information as possible in supplemental material (appended to the paper) is recommended, but including URLs to data and code is permitted.
+    \end{itemize}
+
+
+\item {\bf Experimental Setting/Details}
+    \item[] Question: Does the paper specify all the training and test details (e.g., data splits, hyperparameters, how they were chosen, type of optimizer, etc.) necessary to understand the results?
+    \item[] Answer: \answerYes{} %
+    \item[] Justification: We provide detailed hyperparameters for all experiments.
+    \item[] Guidelines:
+    \begin{itemize}
+        \item The answer NA means that the paper does not include experiments.
+        \item The experimental setting should be presented in the core of the paper to a level of detail that is necessary to appreciate the results and make sense of them.
+        \item The full details can be provided either with the code, in appendix, or as supplemental material.
+    \end{itemize}
+
+\item {\bf Experiment Statistical Significance}
+    \item[] Question: Does the paper report error bars suitably and correctly defined or other appropriate information about the statistical significance of the experiments?
+    \item[] Answer: \answerYes{} %
+    \item[] Justification: Many of our tabels include error bars and standard deviations
+    \item[] Guidelines:
+    \begin{itemize}
+        \item The answer NA means that the paper does not include experiments.
+        \item The authors should answer "Yes" if the results are accompanied by error bars, confidence intervals, or statistical significance tests, at least for the experiments that support the main claims of the paper.
+        \item The factors of variability that the error bars are capturing should be clearly stated (for example, train/test split, initialization, random drawing of some parameter, or overall run with given experimental conditions).
+        \item The method for calculating the error bars should be explained (closed form formula, call to a library function, bootstrap, etc.)
+        \item The assumptions made should be given (e.g., Normally distributed errors).
+        \item It should be clear whether the error bar is the standard deviation or the standard error of the mean.
+        \item It is OK to report 1-sigma error bars, but one should state it. The authors should preferably report a 2-sigma error bar than state that they have a 96\% CI, if the hypothesis of Normality of errors is not verified.
+        \item For asymmetric distributions, the authors should be careful not to show in tables or figures symmetric error bars that would yield results that are out of range (e.g. negative error rates).
+    \end{itemize}
+
+\item {\bf Experiments Compute Resources}
+    \item[] Question: For each experiment, does the paper provide sufficient information on the computer resources (type of compute workers, memory, time of execution) needed to reproduce the experiments?
+    \item[] Answer: 
+    \answerYes{}.
+    \item[] Justification: We conduct all experiments on 8x 3090s, 8xA6000s, 8xA100s, or 8xH100s. The largest models on OpenWebText take 2 weeks to train on 8xA100, the LM1B models only take 2 days to train on the same hardware %
+    \item[] Guidelines:
+    \begin{itemize}
+        \item The answer NA means that the paper does not include experiments.
+        \item The paper should indicate the type of compute workers CPU or GPU, internal cluster, or cloud provider, including relevant memory and storage.
+        \item The paper should provide the amount of compute required for each of the individual experimental runs as well as estimate the total compute. 
+        \item The paper should disclose whether the full research project required more compute than the experiments reported in the paper (e.g., preliminary or failed experiments that didn't make it into the paper). 
+    \end{itemize}
+    
+\item {\bf Code Of Ethics}
+    \item[] Question: Does the research conducted in the paper conform, in every respect, with the NeurIPS Code of Ethics \url{https://neurips.cc/public/EthicsGuidelines}?
+    \item[] Answer: \answerYes{} %
+    \item[] Justification: We follow standard practices
+    \item[] Guidelines:
+    \begin{itemize}
+        \item The answer NA means that the authors have not reviewed the NeurIPS Code of Ethics.
+        \item If the authors answer No, they should explain the special circumstances that require a deviation from the Code of Ethics.
+        \item The authors should make sure to preserve anonymity (e.g., if there is a special consideration due to laws or regulations in their jurisdiction).
+    \end{itemize}
+
+
+\item {\bf Broader Impacts}
+    \item[] Question: Does the paper discuss both potential positive societal impacts and negative societal impacts of the work performed?
+    \item[] Answer: \answerYes{} %
+    \item[] Justification: Our model will allow for more controllable text generation models, and do not increase the capability of current autoregressive models%
+    \item[] Guidelines:
+    \begin{itemize}
+        \item The answer NA means that there is no societal impact of the work performed.
+        \item If the authors answer NA or No, they should explain why their work has no societal impact or why the paper does not address societal impact.
+        \item Examples of negative societal impacts include potential malicious or unintended uses (e.g., disinformation, generating fake profiles, surveillance), fairness considerations (e.g., deployment of technologies that could make decisions that unfairly impact specific groups), privacy considerations, and security considerations.
+        \item The conference expects that many papers will be foundational research and not tied to particular applications, let alone deployments. However, if there is a direct path to any negative applications, the authors should point it out. For example, it is legitimate to point out that an improvement in the quality of generative models could be used to generate deepfakes for disinformation. On the other hand, it is not needed to point out that a generic algorithm for optimizing neural networks could enable people to train models that generate Deepfakes faster.
+        \item The authors should consider possible harms that could arise when the technology is being used as intended and functioning correctly, harms that could arise when the technology is being used as intended but gives incorrect results, and harms following from (intentional or unintentional) misuse of the technology.
+        \item If there are negative societal impacts, the authors could also discuss possible mitigation strategies (e.g., gated release of models, providing defenses in addition to attacks, mechanisms for monitoring misuse, mechanisms to monitor how a system learns from feedback over time, improving the efficiency and accessibility of ML).
+    \end{itemize}
+    
+\item {\bf Safeguards}
+    \item[] Question: Does the paper describe safeguards that have been put in place for responsible release of data or models that have a high risk for misuse (e.g., pre-trained language models, image generators, or scraped datasets)?
+    \item[] Answer: \answerYes{} %
+    \item[] Justification: These models are trained on trivial datasets and unlikely to cause any harm compared to state of the art language models.
+    \item[] Guidelines:
+    \begin{itemize}
+        \item The answer NA means that the paper poses no such risks.
+        \item Released models that have a high risk for misuse or dual-use should be released with necessary safeguards to allow for controlled use of the model, for example by requiring that users adhere to usage guidelines or restrictions to access the model or implementing safety filters. 
+        \item Datasets that have been scraped from the Internet could pose safety risks. The authors should describe how they avoided releasing unsafe images.
+        \item We recognize that providing effective safeguards is challenging, and many papers do not require this, but we encourage authors to take this into account and make a best faith effort.
+    \end{itemize}
+
+\item {\bf Licenses for existing assets}
+    \item[] Question: Are the creators or original owners of assets (e.g., code, data, models), used in the paper, properly credited and are the license and terms of use explicitly mentioned and properly respected?
+    \item[] Answer: \answerYes{} %
+    \item[] Justification: All assets are publically available and we respect the licenses for all the data.
+    \item[] Guidelines:
+    \begin{itemize}
+        \item The answer NA means that the paper does not use existing assets.
+        \item The authors should cite the original paper that produced the code package or dataset.
+        \item The authors should state which version of the asset is used and, if possible, include a URL.
+        \item The name of the license (e.g., CC-BY 4.0) should be included for each asset.
+        \item For scraped data from a particular source (e.g., website), the copyright and terms of service of that source should be provided.
+        \item If assets are released, the license, copyright information, and terms of use in the package should be provided. For popular datasets, \url{paperswithcode.com/datasets} has curated licenses for some datasets. Their licensing guide can help determine the license of a dataset.
+        \item For existing datasets that are re-packaged, both the original license and the license of the derived asset (if it has changed) should be provided.
+        \item If this information is not available online, the authors are encouraged to reach out to the asset's creators.
+    \end{itemize}
+
+\item {\bf New Assets}
+    \item[] Question: Are new assets introduced in the paper well documented and is the documentation provided alongside the assets?
+    \item[] Answer: \answerNA{} %
+    \item[] Justification: We provide no new assets.
+    \item[] Guidelines:
+    \begin{itemize}
+        \item The answer NA means that the paper does not release new assets.
+        \item Researchers should communicate the details of the dataset/code/model as part of their submissions via structured templates. This includes details about training, license, limitations, etc. 
+        \item The paper should discuss whether and how consent was obtained from people whose asset is used.
+        \item At submission time, remember to anonymize your assets (if applicable). You can either create an anonymized URL or include an anonymized zip file.
+    \end{itemize}
+
+    
+\item {\bf Crowdsourcing and Research with Human Subjects}
+    \item[] Question: For crowdsourcing experiments and research with human subjects, does the paper include the full text of instructions given to participants and screenshots, if applicable, as well as details about compensation (if any)? 
+    \item[] Answer: \answerNA{} %
+    \item[] Justification: \answerNA{}
+    \item[] Guidelines:
+    \begin{itemize}
+        \item The answer NA means that the paper does not involve crowdsourcing nor research with human subjects.
+        \item Including this information in the supplemental material is fine, but if the main contribution of the paper involves human subjects, then as much detail as possible should be included in the main paper. 
+        \item According to the NeurIPS Code of Ethics, workers involved in data collection, curation, or other labor should be paid at least the minimum wage in the country of the data collector. 
+    \end{itemize}
+
+\item {\bf Institutional Review Board (IRB) Approvals or Equivalent for Research with Human Subjects}
+    \item[] Question: Does the paper describe potential risks incurred by study participants, whether such risks were disclosed to the subjects, and whether Institutional Review Board (IRB) approvals (or an equivalent approval/review based on the requirements of your country or institution) were obtained?
+    \item[] Answer: \answerNA{} %
+    \item[] Justification: \answerNA{}
+    \item[] Guidelines:
+    \begin{itemize}
+        \item The answer NA means that the paper does not involve crowdsourcing nor research with human subjects.
+        \item Depending on the country in which research is conducted, IRB approval (or equivalent) may be required for any human subjects research. If you obtained IRB approval, you should clearly state this in the paper. 
+        \item We recognize that the procedures for this may vary significantly between institutions and locations, and we expect authors to adhere to the NeurIPS Code of Ethics and the guidelines for their institution. 
+        \item For initial submissions, do not include any information that would break anonymity (if applicable), such as the institution conducting the review.
+    \end{itemize}
+
+\end{enumerate}
+
+End of NEURIPS CHECKLIST. Must be at end of document after appendix
+\end{appendices}
+\end{document}

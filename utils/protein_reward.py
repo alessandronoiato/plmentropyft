@@ -17,13 +17,17 @@ def make_self_surprise_reward(
     renorm_over_allowed: bool = True,
     base_ref_model=None,
     first_variation_coef: float = 0.0,
-    ref_logp_scale: float = 1.0,
+    entropy_coef: float = 1.0,
     out_dir: Optional[str] = None,
 ):
     """Create a reward function for TRL GRPO.
 
-    Reward per sequence:
-      R = -ref_logp_scale * log p_ref(seq) - first_variation_coef * (log p_ref(seq) - log p_base(seq))
+    Reward per sequence (first variation of μ H(π) - η KL(π || π_base)):
+      R = -(μ + η) * log p_ref(seq) + η * log p_base(seq)
+
+    where:
+      μ = entropy_coef (coefficient on entropy term)
+      η = first_variation_coef (coefficient on KL-to-base penalty)
 
     Also logs in-update approximate KL: mean(log p_pol - log p_ref) per batch to
     {out_dir}/grpo_approx_kl_in_update.csv (defaults to project outputs dir).
@@ -90,8 +94,8 @@ def make_self_surprise_reward(
         approx_kl_batch = (seq_logp_pol - seq_logp_ref).mean().item()
         _append_approx_kl(approx_kl_batch)
 
-        # Reward = -ref_logp_scale * log p_ref(seq) - coef * (log p_ref - log p_base) [first variation of KL(π||p_base) at ref]
-        total = -ref_logp_scale * seq_logp_ref
+        # Reward = -(μ + η) * log p_ref(seq) + η * log p_base(seq)
+        # where μ = entropy_coef, η = first_variation_coef
         if base_ref_model is not None and first_variation_coef != 0.0:
             base_ref_model.to(device)
             seq_logp_base = compute_sequence_logprobs(
@@ -110,7 +114,10 @@ def make_self_surprise_reward(
                 batch_mean_logp_base=float(seq_logp_base.mean().item()),
                 coef=float(first_variation_coef),
             )
-            total = total - first_variation_coef * (seq_logp_ref - seq_logp_base)
+            total = -(entropy_coef + first_variation_coef) * seq_logp_ref + first_variation_coef * seq_logp_base
+        else:
+            # No base model or η=0: just entropy term
+            total = -entropy_coef * seq_logp_ref
         return total.float().cpu().tolist()
 
     def _single_reward(prompt: str, completion: str) -> float:
@@ -133,13 +140,15 @@ def make_self_surprise_reward(
         # KL logging (single sample)
         approx_kl = (seq_logp_pol - seq_logp_ref).item()
         _append_approx_kl(approx_kl)
-        total = -ref_logp_scale * seq_logp_ref
+        # Reward = -(μ + η) * log p_ref(seq) + η * log p_base(seq)
         if base_ref_model is not None and first_variation_coef != 0.0:
             base_ref_model.to(device)
             seq_logp_base = compute_sequence_logprobs(
                 base_ref_model, input_ids, attention_mask, tokenizer, env, aa_ids, id_eos, renorm_over_allowed=renorm_over_allowed
             )
-            total = total - first_variation_coef * (seq_logp_ref - seq_logp_base)
+            total = -(entropy_coef + first_variation_coef) * seq_logp_ref + first_variation_coef * seq_logp_base
+        else:
+            total = -entropy_coef * seq_logp_ref
         return float(total.item())
 
     def reward_func(*args, **kwargs):

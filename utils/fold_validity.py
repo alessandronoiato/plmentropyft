@@ -171,13 +171,13 @@ def fold_plddt_stats(
                             "error": f"{type(exc2).__name__}: {exc2}",
                         }
                 if rec is None:
-                    rec = {
-                        "ok": False,
-                        "mean_plddt": None,
-                        "median_plddt": None,
-                        "length": len(s),
-                        "error": f"{type(exc).__name__}: {exc}",
-                    }
+                rec = {
+                    "ok": False,
+                    "mean_plddt": None,
+                    "median_plddt": None,
+                    "length": len(s),
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
             # Timeout handling
             if timeout_s is not None and (time.time() - start) > timeout_s:
                 rec = {
