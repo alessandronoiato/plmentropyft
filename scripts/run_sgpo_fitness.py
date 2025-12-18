@@ -558,6 +558,7 @@ def main():
                 report_to="wandb" if not args.no_wandb else "none",
                 bf16=use_bf16,
                 fp16=False,
+                gradient_checkpointing=False,  # ProGen doesn't support this
             )
             
             # Create dataset of prompts (GRPO uses reward function, not labeled data)
@@ -907,6 +908,7 @@ def main():
                     report_to="none",  # Disable wandb for sweep
                     bf16=use_bf16,
                     fp16=False,
+                    gradient_checkpointing=False,  # ProGen doesn't support this
                 )
                 
                 prompts = ["1"] * args.batch_size
