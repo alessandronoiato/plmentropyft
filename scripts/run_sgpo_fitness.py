@@ -904,7 +904,7 @@ def main():
                     beta=args.beta,
                     num_generations=args.num_generations,
                     logging_steps=10,
-                    save_steps=max(args.steps // 2, 1),
+                    save_strategy="no",  # Don't save checkpoints (ProGen config issues)
                     report_to="none",  # Disable wandb for sweep
                     bf16=use_bf16,
                     fp16=False,
