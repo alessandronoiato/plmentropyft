@@ -66,3 +66,6 @@ fold_outputs/
 # --- Docs/notes not tracked ---
 mode_discovery.md
 
+*.pdf
+*.tex
+*.md
