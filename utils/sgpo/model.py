@@ -111,6 +111,18 @@ class ProGen2Wrapper:
             if not hasattr(self.model.config, '_name_or_path'):
                 self.model.config._name_or_path = model_path
             
+            # Ensure model has a GenerationConfig (required by transformers 4.50+)
+            from transformers import GenerationConfig
+            if self.model.generation_config is None:
+                self.model.generation_config = GenerationConfig(
+                    pad_token_id=self.pad_token_id,
+                    bos_token_id=self.start_token_id,
+                    eos_token_id=self.end_token_id,
+                )
+            # Ensure generation_config has transformers_version
+            if not hasattr(self.model.generation_config, 'transformers_version') or self.model.generation_config.transformers_version is None:
+                self.model.generation_config.transformers_version = _tf.__version__
+            
             # Register the class on transformers module for TRL compatibility
             # TRL does: architecture = getattr(transformers, config.architectures[0])
             transformers.ProGenForCausalLM = ProGenForCausalLM
