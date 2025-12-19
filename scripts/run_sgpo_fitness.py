@@ -998,7 +998,11 @@ def main():
             except Exception as e:
                 print(f"[ERROR] Config {cfg_name} failed: {e}")
                 import traceback
+                print("\n" + "="*60)
+                print("FULL TRACEBACK:")
+                print("="*60)
                 traceback.print_exc()
+                print("="*60 + "\n")
                 continue
         
         # Save Pareto summary
