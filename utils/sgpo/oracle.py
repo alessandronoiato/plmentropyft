@@ -138,13 +138,26 @@ class SGPOFitnessOracle:
         print(f"  Dataset: {self.dataset}, Seq length: {seq_len}, Input dim: {self.input_dim}")
         
         for ckpt_file in ckpt_files:
+            ckpt_path = os.path.join(checkpoint_dir, ckpt_file)
+            state_dict = torch.load(ckpt_path, map_location=self.device, weights_only=True)
+            
+            # DEBUG: Check actual model dimensions from checkpoint
+            if not hasattr(self, '_dim_debug_shown'):
+                self._dim_debug_shown = True
+                fc1_weight = state_dict.get('fc1.weight', None)
+                if fc1_weight is not None:
+                    actual_input_dim = fc1_weight.shape[1]
+                    print(f"[DEBUG Oracle] Checkpoint fc1.weight shape: {fc1_weight.shape}")
+                    print(f"[DEBUG Oracle] Expected input_dim={self.input_dim}, actual from checkpoint={actual_input_dim}")
+                    if actual_input_dim != self.input_dim:
+                        print(f"[WARNING] Input dimension mismatch! Using checkpoint's input_dim={actual_input_dim}")
+                        self.input_dim = actual_input_dim
+            
             model = SGPOOracleModel(
                 input_dim=self.input_dim,
                 hidden_dim=self.hidden_dim,
                 dropout_rate=self.dropout_rate,
             )
-            ckpt_path = os.path.join(checkpoint_dir, ckpt_file)
-            state_dict = torch.load(ckpt_path, map_location=self.device, weights_only=True)
             model.load_state_dict(state_dict)
             model.to(self.device)
             model.eval()
@@ -165,6 +178,13 @@ class SGPOFitnessOracle:
         aa_to_idx = {aa: i for i, aa in enumerate(AA_ALPHABET)}
         batch_size = len(sequences)
         seq_len = len(sequences[0]) if sequences else 0
+        
+        # DEBUG: Check expected vs actual length
+        expected_len = self.seq_lengths.get(self.dataset, 15)
+        if not hasattr(self, '_len_debug_shown'):
+            self._len_debug_shown = True
+            print(f"[DEBUG Oracle] Expected seq_len={expected_len}, got seq_len={seq_len}")
+            print(f"[DEBUG Oracle] Sample sequences: {sequences[:3]}")
         
         # Validate all sequences have same length
         for s in sequences:
@@ -236,6 +256,12 @@ class SGPOFitnessOracle:
         # Average across ensemble
         ensemble_preds = torch.stack(all_preds, dim=0).mean(dim=0)  # (batch,)
         predictions = ensemble_preds.cpu().numpy()
+        
+        # DEBUG: Show raw predictions before clamping (first call only)
+        if not hasattr(self, '_debug_shown'):
+            self._debug_shown = True
+            print(f"[DEBUG Oracle] Raw predictions (first 5): {predictions[:5]}")
+            print(f"[DEBUG Oracle] Min={predictions.min():.4f}, Max={predictions.max():.4f}, Mean={predictions.mean():.4f}")
         
         # Apply Hamming penalty if enabled
         predictions = self._apply_penalty(predictions, sequences)
