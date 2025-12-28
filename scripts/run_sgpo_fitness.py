@@ -532,11 +532,6 @@ def main():
         print(f"  Entropy coef (μ): {args.entropy_coef}")
         print(f"  First variation coef (η): {args.first_variation_coef}")
         
-        # Placeholder reward for trainer initialization
-        def _placeholder_reward(*args, **kwargs):
-            return [0.0]
-        _placeholder_reward.get_fitness_log = lambda: []
-        
         # GRPO Training Setup
         print("\n[Setting up GRPO Trainer]")
         try:
@@ -606,11 +601,31 @@ def main():
                 print(f"  Warning: could not register model class: {e}")
                 traceback.print_exc()
             
-            # Create trainer with placeholder reward
+            # Create a mutable wrapper that will hold the real reward function
+            # This allows us to pass it to trainer, then update it after trainer is created
+            class RewardWrapper:
+                def __init__(self):
+                    self.real_reward_func = None
+                    self._fitness_log = []
+                
+                def __call__(self, *args, **kwargs):
+                    if self.real_reward_func is not None:
+                        return self.real_reward_func(*args, **kwargs)
+                    # Fallback if called before setup (shouldn't happen)
+                    return [0.0] * len(kwargs.get('prompts', args[0] if args else []))
+                
+                def get_fitness_log(self):
+                    if self.real_reward_func is not None and hasattr(self.real_reward_func, 'get_fitness_log'):
+                        return self.real_reward_func.get_fitness_log()
+                    return self._fitness_log
+            
+            reward_wrapper = RewardWrapper()
+            
+            # Create trainer with wrapper reward
             trainer = GRPOTrainer(
                 model=progen2.model,
                 args=grpo_config,
-                reward_funcs=[_placeholder_reward],
+                reward_funcs=[reward_wrapper],
                 train_dataset=train_ds,
                 eval_dataset=train_ds,
                 processing_class=progen2.tokenizer,
@@ -629,8 +644,8 @@ def main():
                 out_dir=args.out_dir,
             )
             
-            # Replace placeholder with real reward function
-            trainer.reward_funcs = [reward_func]
+            # Update wrapper to use real function
+            reward_wrapper.real_reward_func = reward_func
             
             print("\n[Starting training...]")
             trainer.train()
@@ -927,20 +942,36 @@ def main():
                     return _original_getattr(self, name)
                 _tf_import_utils._LazyModule.__getattr__ = _patched_getattr
                 
-                def _placeholder_reward(*a, **kw):
-                    return [0.0]
-                _placeholder_reward.get_fitness_log = lambda: []
+                # Create a mutable wrapper that will hold the real reward function
+                # This allows us to pass it to trainer, then update it after trainer is created
+                class RewardWrapper:
+                    def __init__(self):
+                        self.real_reward_func = None
+                        self._fitness_log = []
+                    
+                    def __call__(self, *args, **kwargs):
+                        if self.real_reward_func is not None:
+                            return self.real_reward_func(*args, **kwargs)
+                        # Fallback if called before setup (shouldn't happen)
+                        return [0.0] * len(kwargs.get('prompts', args[0] if args else []))
+                    
+                    def get_fitness_log(self):
+                        if self.real_reward_func is not None and hasattr(self.real_reward_func, 'get_fitness_log'):
+                            return self.real_reward_func.get_fitness_log()
+                        return self._fitness_log
+                
+                reward_wrapper = RewardWrapper()
                 
                 trainer = GRPOTrainer(
                     model=progen2.model,
                     args=grpo_config,
-                    reward_funcs=[_placeholder_reward],
+                    reward_funcs=[reward_wrapper],
                     train_dataset=train_ds,
                     eval_dataset=train_ds,
                     processing_class=progen2.tokenizer,
                 )
                 
-                # Create reward function with this config's parameters
+                # Now create the real reward function with trainer access
                 reward_func = make_fitness_reward(
                     pipeline=pipeline,
                     trainer=trainer,
@@ -951,7 +982,8 @@ def main():
                     base_ref_model=None,
                     out_dir=cfg_out_dir,
                 )
-                trainer.reward_funcs = [reward_func]
+                # Update the wrapper to use the real function
+                reward_wrapper.real_reward_func = reward_func
                 
                 print(f"\n[Training with fitness_scale={cfg['fitness_scale']}, entropy_coef={cfg['entropy_coef']}...]")
                 trainer.train()
