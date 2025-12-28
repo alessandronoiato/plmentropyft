@@ -604,6 +604,8 @@ def main():
             # Create a mutable wrapper that will hold the real reward function
             # This allows us to pass it to trainer, then update it after trainer is created
             class RewardWrapper:
+                __name__ = "fitness_reward"  # TRL expects this attribute
+                
                 def __init__(self):
                     self.real_reward_func = None
                     self._fitness_log = []
@@ -945,6 +947,8 @@ def main():
                 # Create a mutable wrapper that will hold the real reward function
                 # This allows us to pass it to trainer, then update it after trainer is created
                 class RewardWrapper:
+                    __name__ = "fitness_reward"  # TRL expects this attribute
+                    
                     def __init__(self):
                         self.real_reward_func = None
                         self._fitness_log = []
