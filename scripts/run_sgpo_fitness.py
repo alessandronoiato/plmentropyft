@@ -273,9 +273,7 @@ def main():
     parser.add_argument("--entropy_coef", type=float, default=0.1,
                         help="Entropy coefficient μ")
     parser.add_argument("--first_variation_coef", type=float, default=0.0,
-                        help="KL-to-base coefficient η")
-    parser.add_argument("--base_model_path", type=str, default="hugohrban/progen2-small",
-                        help="Path to base (pre-fine-tuning) ProGen2 model for η regularization")
+                        help="KL-to-base coefficient η (π_base = frozen ref at GRPO start)")
     
     # ===== Training =====
     parser.add_argument("--seed", type=int, default=42,
@@ -551,21 +549,7 @@ def main():
         print(f"  Fitness scale (λ): {args.fitness_scale}")
         print(f"  Entropy coef (μ): {args.entropy_coef}")
         print(f"  First variation coef (η): {args.first_variation_coef}")
-        
-        # Load base model if η > 0
-        base_ref_model = None
-        if args.first_variation_coef > 0:
-            print(f"\n[Loading base model for η regularization: {args.base_model_path}]")
-            base_progen2 = ProGen2Wrapper(
-                model_path=args.base_model_path,
-                device=device,
-                sgpo_repo=args.sgpo_repo,
-            )
-            base_ref_model = base_progen2.model
-            base_ref_model.eval()
-            for param in base_ref_model.parameters():
-                param.requires_grad = False
-            print(f"[Base model loaded and frozen]")
+        print("  Note: π = current policy (trainer.model), π_base = frozen ref (trainer.ref_model)")
         
         # GRPO Training Setup
         print("\n[Setting up GRPO Trainer]")
@@ -679,7 +663,6 @@ def main():
                 entropy_coef=args.entropy_coef,
                 first_variation_coef=args.first_variation_coef,
                 fitness_scale=args.fitness_scale,
-                base_ref_model=base_ref_model,
                 out_dir=args.out_dir,
             )
             
@@ -888,22 +871,8 @@ def main():
         device = "cuda" if torch.cuda.is_available() else "cpu"
         pareto_results = []
         
-        # Load base model once if η > 0 (reused across all configs)
-        base_ref_model = None
-        if args.first_variation_coef > 0:
-            print(f"\n[Loading base model for η regularization: {args.base_model_path}]")
-            base_progen2 = ProGen2Wrapper(
-                model_path=args.base_model_path,
-                device=device,
-                sgpo_repo=args.sgpo_repo,
-            )
-            base_ref_model = base_progen2.model
-            base_ref_model.eval()
-            for param in base_ref_model.parameters():
-                param.requires_grad = False
-            print(f"[Base model loaded and frozen]")
-        
         # Run each configuration
+        # Note: π = trainer.model (current policy), π_base = trainer.ref_model (frozen at start)
         for cfg_idx, cfg in enumerate(sweep_configs):
             print(f"\n{'='*60}")
             print(f"[Config {cfg_idx+1}/{len(sweep_configs)}]")
@@ -1037,7 +1006,6 @@ def main():
                     entropy_coef=cfg["entropy_coef"],
                     first_variation_coef=args.first_variation_coef,
                     fitness_scale=cfg["fitness_scale"],
-                    base_ref_model=base_ref_model,
                     out_dir=cfg_out_dir,
                 )
                 # Update the wrapper to use the real function

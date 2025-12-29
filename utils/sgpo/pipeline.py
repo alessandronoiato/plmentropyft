@@ -199,31 +199,29 @@ def make_fitness_reward(
     entropy_coef: float = 1.0,
     first_variation_coef: float = 0.0,
     fitness_scale: float = 1.0,
-    base_ref_model=None,  # Optional base model for first variation KL term
     out_dir: Optional[str] = None,
 ):
     """
     Create a reward function that combines fitness with entropy regularization.
     
-    Reward per sequence (first variation of J = E[λr] + μ H - η KL):
-        R(y) = λ * r(y) - (μ + η) * log p_ref(y) + η * log p_base(y)
+    Reward per sequence (first variation of J = E[λr] + μ H(π) - η KL(π || π_base)):
+        R(y) = λ * r(y) - (μ + η) * log π(y) + η * log π_base(y)
     
     where:
         λ = fitness_scale (external fitness reward weight)
-        μ = entropy_coef (entropy bonus)
-        η = first_variation_coef (KL-to-base penalty)
+        μ = entropy_coef (entropy bonus - encourages exploration)
+        η = first_variation_coef (KL-to-base penalty - prevents drift)
         r(y) = fitness oracle score
-        p_ref = reference policy (frozen copy of policy at start)
-        p_base = base model (optional, for anchoring to pretrained)
+        π = current policy (trainer.model) - being optimized
+        π_base = frozen reference (trainer.ref_model) - SGPO fine-tuned model at start
     
     Args:
         pipeline: SGPOPipeline for align -> project -> score
         trainer: GRPOTrainer instance (provides ref_model and model)
         tokenizer: Tokenizer for decoding sequences
         entropy_coef: μ (entropy coefficient)
-        first_variation_coef: η (KL-to-base coefficient)
+        first_variation_coef: η (KL-to-base coefficient)  
         fitness_scale: λ (scale factor for fitness reward)
-        base_ref_model: Optional base model for first variation term
         out_dir: Directory for logging
     
     Returns:
@@ -356,33 +354,30 @@ def make_fitness_reward(
                 print(f"  Combo {i}: '{combo}' (len={len(combo)}) -> fitness={score:.4f}")
         fitness_tensor = torch.tensor(fitness_scores, dtype=torch.float32, device=device)
         
-        # Compute reward: R = λ*fitness - (μ + η)*log p_ref + η*log p_base
-        # where μ = entropy_coef, η = first_variation_coef
+        # Compute reward: R = λ*fitness - (μ + η)*log π + η*log π_base
+        # where:
+        #   π = seq_logp_pol (current policy being trained)
+        #   π_base = seq_logp_ref (frozen reference = SGPO fine-tuned model)
+        #   μ = entropy_coef (encourages exploration)
+        #   η = first_variation_coef (KL regularization to base)
+        #
+        # This expands to: R = λ*fitness - μ*log π - η*(log π - log π_base)
         
-        if base_ref_model is not None and first_variation_coef != 0.0:
-            # Move base model to device and compute its log-probs
-            base_ref_model.to(device)
-            seq_logp_base = compute_sequence_logprobs_simple(
-                base_ref_model, input_ids, attention_mask
-            )
-            
-            # Log first variation stats
+        # Log stats for debugging
+        if first_variation_coef != 0.0:
             _append_first_variation(
                 batch_mean_logp_ref=float(seq_logp_ref.mean().item()),
-                batch_mean_logp_base=float(seq_logp_base.mean().item()),
+                batch_mean_logp_base=float(seq_logp_pol.mean().item()),  # Now logging pol as "current"
                 coef=float(first_variation_coef),
                 batch_mean_fitness=float(fitness_tensor.mean().item()),
             )
-            
-            # Full first variation reward
-            total = (
-                fitness_scale * fitness_tensor 
-                - (entropy_coef + first_variation_coef) * seq_logp_ref 
-                + first_variation_coef * seq_logp_base
-            )
-        else:
-            # No base model or η=0: just fitness + entropy term
-            total = fitness_scale * fitness_tensor - entropy_coef * seq_logp_ref
+        
+        # Reward using current policy (seq_logp_pol) and base (seq_logp_ref)
+        total = (
+            fitness_scale * fitness_tensor 
+            - (entropy_coef + first_variation_coef) * seq_logp_pol 
+            + first_variation_coef * seq_logp_ref
+        )
         
         rewards = total.float().cpu().tolist()
         
@@ -397,7 +392,8 @@ def make_fitness_reward(
                 "max_fitness": float(np.max(fitness_scores)),
                 "min_fitness": float(np.min(fitness_scores)),
                 "mean_reward": float(np.mean(rewards)),
-                "mean_logp_ref": float(seq_logp_ref.mean().item()),
+                "mean_logp_pol": float(seq_logp_pol.mean().item()),  # Current policy
+                "mean_logp_ref": float(seq_logp_ref.mean().item()),  # Base (frozen)
                 "n_sequences": len(sequences),
             })
             
