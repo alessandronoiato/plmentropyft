@@ -554,6 +554,7 @@ def main():
                 bf16=use_bf16,
                 fp16=False,
                 gradient_checkpointing=False,  # ProGen doesn't support this
+                seed=args.seed,  # Use specified seed for reproducibility
             )
             
             # Create dataset of prompts (GRPO uses reward function, not labeled data)
@@ -926,6 +927,7 @@ def main():
                     bf16=use_bf16,
                     fp16=False,
                     gradient_checkpointing=False,  # ProGen doesn't support this
+                    seed=run_seed,  # Ensure different seeds produce different results
                 )
                 
                 prompts = ["1"] * args.batch_size
