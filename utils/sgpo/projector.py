@@ -5,10 +5,16 @@ This module projects aligned sequences to the 15-position combo format
 expected by the SGPO fitness oracle.
 """
 
+import os
 import random
 from typing import List, Tuple
 
 from .data import AA_ALPHABET
+
+
+def _is_verbose() -> bool:
+    """Check if verbose/debug output is enabled."""
+    return os.environ.get("SGPO_VERBOSE", "0") == "1"
 
 
 class TrpBProjector:
@@ -74,8 +80,8 @@ class TrpBProjector:
             # Step 4: Extract combo
             combo = "".join(projected[p] for p in self.positions_0idx if p < len(projected))
             
-            # DEBUG: Show combo extraction on first call
-            if not hasattr(self, '_combo_debug_shown'):
+            # DEBUG: Show combo extraction on first call (when verbose)
+            if not hasattr(self, '_combo_debug_shown') and _is_verbose():
                 self._combo_debug_shown = True
                 print(f"[DEBUG Projector] Projected len={len(projected)}, positions_0idx={self.positions_0idx[:5]}...")
                 print(f"[DEBUG Projector] Extracted combo len={len(combo)}, combo='{combo}'")

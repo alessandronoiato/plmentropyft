@@ -15,6 +15,11 @@ import torch.nn as nn
 
 from .data import AA_ALPHABET
 
+
+def _is_verbose() -> bool:
+    """Check if verbose/debug output is enabled."""
+    return os.environ.get("SGPO_VERBOSE", "0") == "1"
+
 if TYPE_CHECKING:
     from .projector import TrpBProjector
 
@@ -147,8 +152,9 @@ class SGPOFitnessOracle:
                 fc1_weight = state_dict.get('fc1.weight', None)
                 if fc1_weight is not None:
                     actual_input_dim = fc1_weight.shape[1]
-                    print(f"[DEBUG Oracle] Checkpoint fc1.weight shape: {fc1_weight.shape}")
-                    print(f"[DEBUG Oracle] Expected input_dim={self.input_dim}, actual from checkpoint={actual_input_dim}")
+                    if _is_verbose():
+                        print(f"[DEBUG Oracle] Checkpoint fc1.weight shape: {fc1_weight.shape}")
+                        print(f"[DEBUG Oracle] Expected input_dim={self.input_dim}, actual from checkpoint={actual_input_dim}")
                     if actual_input_dim != self.input_dim:
                         print(f"[WARNING] Input dimension mismatch! Using checkpoint's input_dim={actual_input_dim}")
                         self.input_dim = actual_input_dim
@@ -181,7 +187,7 @@ class SGPOFitnessOracle:
         
         # DEBUG: Check expected vs actual length
         expected_len = self.seq_lengths.get(self.dataset, 15)
-        if not hasattr(self, '_len_debug_shown'):
+        if not hasattr(self, '_len_debug_shown') and _is_verbose():
             self._len_debug_shown = True
             print(f"[DEBUG Oracle] Expected seq_len={expected_len}, got seq_len={seq_len}")
             print(f"[DEBUG Oracle] Sample sequences: {sequences[:3]}")
@@ -257,8 +263,8 @@ class SGPOFitnessOracle:
         ensemble_preds = torch.stack(all_preds, dim=0).mean(dim=0)  # (batch,)
         predictions = ensemble_preds.cpu().numpy()
         
-        # DEBUG: Show raw predictions before clamping (first call only)
-        if not hasattr(self, '_debug_shown'):
+        # DEBUG: Show raw predictions (first call only, when verbose)
+        if not hasattr(self, '_debug_shown') and _is_verbose():
             self._debug_shown = True
             print(f"[DEBUG Oracle] Raw predictions (first 5): {predictions[:5]}")
             print(f"[DEBUG Oracle] Min={predictions.min():.4f}, Max={predictions.max():.4f}, Mean={predictions.mean():.4f}")

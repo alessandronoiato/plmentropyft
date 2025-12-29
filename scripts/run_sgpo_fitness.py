@@ -35,11 +35,24 @@ Usage:
         --pareto_entropy_coefs "0.01,0.05,0.1,0.2,0.5" --steps 100
 """
 
+# Suppress warnings BEFORE any imports
+import warnings
+import os
+import sys
+
+# Suppress common HuggingFace/transformers warnings
+warnings.filterwarnings("ignore", message=".*GenerationMixin.*")
+warnings.filterwarnings("ignore", message=".*trust_remote_code.*")
+warnings.filterwarnings("ignore", message=".*TRANSFORMERS_CACHE.*")
+warnings.filterwarnings("ignore", message=".*model of type progen.*")
+warnings.filterwarnings("ignore", message=".*tokenizer has new PAD/BOS/EOS.*")
+
+# Also set logging level for transformers
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+
 import argparse
 import json
-import os
 import random
-import sys
 
 # Ensure remote code is trusted in non-interactive/batch environments
 os.environ["HF_ALLOW_CODE_EXECUTION"] = "1"
@@ -299,8 +312,13 @@ def main():
                         help="WandB run name")
     parser.add_argument("--no_wandb", action="store_true",
                         help="Disable WandB logging")
+    parser.add_argument("--verbose", action="store_true",
+                        help="Enable verbose/debug output (progress bars, debug prints)")
     
     args = parser.parse_args()
+    
+    # Set verbose flag globally for SGPO modules
+    os.environ["SGPO_VERBOSE"] = "1" if args.verbose else "0"
     
     # Set random seed
     random.seed(args.seed)
@@ -555,6 +573,7 @@ def main():
                 fp16=False,
                 gradient_checkpointing=False,  # ProGen doesn't support this
                 seed=args.seed,  # Use specified seed for reproducibility
+                disable_tqdm=not args.verbose,  # Suppress progress bars unless verbose
             )
             
             # Create dataset of prompts (GRPO uses reward function, not labeled data)
@@ -928,6 +947,7 @@ def main():
                     fp16=False,
                     gradient_checkpointing=False,  # ProGen doesn't support this
                     seed=run_seed,  # Ensure different seeds produce different results
+                    disable_tqdm=not args.verbose,  # Suppress progress bars unless verbose
                 )
                 
                 prompts = ["1"] * args.batch_size

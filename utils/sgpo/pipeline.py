@@ -21,6 +21,11 @@ from .oracle import SGPOFitnessOracle
 from .projector import TrpBProjector
 
 
+def _is_verbose() -> bool:
+    """Check if verbose/debug output is enabled."""
+    return os.environ.get("SGPO_VERBOSE", "0") == "1"
+
+
 def compute_sequence_logprobs_simple(
     model,
     input_ids: torch.LongTensor,
@@ -335,8 +340,8 @@ def make_fitness_reward(
             aa_seq = _decode_to_aa(cid)
             sequences.append(aa_seq)
         
-        # DEBUG: Log sample sequences on first few batches
-        if _log_state["batch_count"] < 3:
+        # DEBUG: Log sample sequences on first few batches (when verbose)
+        if _log_state["batch_count"] < 3 and _is_verbose():
             print(f"\n[DEBUG batch {_log_state['batch_count']+1}] Sample decoded sequences:")
             for i, seq in enumerate(sequences[:3]):
                 print(f"  Seq {i}: len={len(seq)}, first50='{seq[:50]}'")
@@ -344,8 +349,8 @@ def make_fitness_reward(
         # Get fitness scores from oracle
         fitness_scores, combos = pipeline.score_sequences(sequences)
         
-        # DEBUG: Log sample combos and scores on first few batches
-        if _log_state["batch_count"] < 3:
+        # DEBUG: Log sample combos and scores on first few batches (when verbose)
+        if _log_state["batch_count"] < 3 and _is_verbose():
             print(f"[DEBUG batch {_log_state['batch_count']+1}] Sample combos and scores:")
             for i, (combo, score) in enumerate(zip(combos[:3], fitness_scores[:3])):
                 print(f"  Combo {i}: '{combo}' (len={len(combo)}) -> fitness={score:.4f}")
