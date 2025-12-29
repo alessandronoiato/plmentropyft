@@ -266,8 +266,10 @@ class SGPOFitnessOracle:
         # Apply Hamming penalty if enabled
         predictions = self._apply_penalty(predictions, sequences)
         
-        # Clamp to non-negative (fitness can't be negative)
-        predictions = np.maximum(predictions, 0.0)
+        # Note: We do NOT clamp to non-negative here.
+        # Raw predictions (including negatives) preserve gradient signal for GRPO.
+        # SGPO's original code clamped because "there shouldn't be any for CreiLOV",
+        # but for GRPO training we need the relative ordering of all predictions.
         
         return predictions.tolist()
     
