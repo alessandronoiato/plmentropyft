@@ -910,6 +910,32 @@ def main():
             cfg_out_dir = os.path.join(args.out_dir, "pareto", cfg_name)
             os.makedirs(cfg_out_dir, exist_ok=True)
             
+            # Initialize WandB for this sweep run
+            wandb_run = None
+            if not args.no_wandb:
+                try:
+                    import wandb
+                    wandb_run = wandb.init(
+                        project=args.wandb_project,
+                        name=f"pareto_{cfg_name}",
+                        config={
+                            "fitness_scale": cfg["fitness_scale"],
+                            "entropy_coef": cfg["entropy_coef"],
+                            "beta": cfg["beta"],
+                            "steps": cfg["steps"],
+                            "first_variation_coef": cfg["first_variation_coef"],
+                            "repeat": cfg["repeat"],
+                            "seed": cfg["seed"],
+                            "batch_size": args.batch_size,
+                            "num_generations": args.num_generations,
+                            "learning_rate": args.learning_rate,
+                            "dataset": args.dataset,
+                        },
+                        reinit=True,  # Allow multiple runs in same process
+                    )
+                except Exception as e:
+                    print(f"[WandB] Warning: {e}")
+            
             try:
                 # Initialize components (fresh for each run)
                 print("\n[Loading model and components...]")
@@ -961,7 +987,7 @@ def main():
                     num_generations=args.num_generations,
                     logging_steps=10,
                     save_strategy="no",  # Don't save checkpoints (ProGen config issues)
-                    report_to="none",  # Disable wandb for sweep
+                    report_to="wandb" if wandb_run else "none",
                     bf16=use_bf16,
                     fp16=False,
                     gradient_checkpointing=False,  # ProGen doesn't support this
@@ -1069,10 +1095,27 @@ def main():
                     # Save per-config results
                     with open(os.path.join(cfg_out_dir, "results.json"), "w") as f:
                         json.dump(result_entry, f, indent=2)
+                    
+                    # Log final metrics to WandB
+                    if wandb_run:
+                        wandb_run.log({
+                            "final/mean_fitness": result_entry["mean_fitness"],
+                            "final/std_fitness": result_entry["std_fitness"],
+                            "final/max_fitness": result_entry["max_fitness"],
+                            "final/q90_fitness": result_entry["q90_fitness"],
+                            "final/unique_count": result_entry["unique_count"],
+                            "final/shannon_entropy": result_entry["shannon_entropy"],
+                            "final/pairwise_diversity": result_entry["pairwise_diversity"],
+                        })
                 
                 # Clean up
                 del trainer, progen2, pipeline
                 torch.cuda.empty_cache() if torch.cuda.is_available() else None
+                
+                # Finish WandB run for this config
+                if wandb_run:
+                    wandb_run.finish()
+                    wandb_run = None
                 
             except Exception as e:
                 print(f"[ERROR] Config {cfg_name} failed: {e}")
@@ -1082,6 +1125,10 @@ def main():
                 print("="*60)
                 traceback.print_exc()
                 print("="*60 + "\n")
+                # Finish WandB run even on error
+                if wandb_run:
+                    wandb_run.finish(exit_code=1)
+                    wandb_run = None
                 continue
         
         # Save Pareto summary
