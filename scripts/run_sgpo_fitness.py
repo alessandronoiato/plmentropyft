@@ -300,6 +300,12 @@ def main():
                         help="Comma-separated fitness_scale values for Pareto sweep (keep fixed)")
     parser.add_argument("--pareto_entropy_coefs", type=str, default="0.01,0.05,0.1,0.2,0.5",
                         help="Comma-separated entropy_coef (μ) values for Pareto sweep")
+    parser.add_argument("--pareto_betas", type=str, default=None,
+                        help="Comma-separated beta (KL penalty) values for Pareto sweep. If not set, uses --beta")
+    parser.add_argument("--pareto_steps", type=str, default=None,
+                        help="Comma-separated steps values for Pareto sweep. If not set, uses --steps")
+    parser.add_argument("--pareto_first_variation_coefs", type=str, default=None,
+                        help="Comma-separated first_variation_coef (η) values. If not set, uses --first_variation_coef")
     parser.add_argument("--pareto_repeats", type=int, default=3,
                         help="Number of repeats per Pareto configuration")
     
@@ -826,24 +832,35 @@ def main():
         # Parse sweep parameters
         fitness_scales = [float(x) for x in args.pareto_fitness_scales.split(",")]
         entropy_coefs = [float(x) for x in args.pareto_entropy_coefs.split(",")]
+        betas = [float(x) for x in args.pareto_betas.split(",")] if args.pareto_betas else [args.beta]
+        steps_list = [int(x) for x in args.pareto_steps.split(",")] if args.pareto_steps else [args.steps]
+        fv_coefs = [float(x) for x in args.pareto_first_variation_coefs.split(",")] if args.pareto_first_variation_coefs else [args.first_variation_coef]
         
         print(f"\n[Pareto sweep configuration]")
-        print(f"  Fitness scales: {fitness_scales}")
-        print(f"  Entropy coefs:  {entropy_coefs}")
-        print(f"  Repeats:        {args.pareto_repeats}")
-        print(f"  Steps per run:  {args.steps}")
+        print(f"  Fitness scales:         {fitness_scales}")
+        print(f"  Entropy coefs (μ):      {entropy_coefs}")
+        print(f"  Betas (β):              {betas}")
+        print(f"  Steps:                  {steps_list}")
+        print(f"  First variation (η):    {fv_coefs}")
+        print(f"  Repeats:                {args.pareto_repeats}")
         
         # Create sweep combinations
         sweep_configs = []
         for fs in fitness_scales:
             for ec in entropy_coefs:
-                for rep in range(args.pareto_repeats):
-                    sweep_configs.append({
-                        "fitness_scale": fs,
-                        "entropy_coef": ec,
-                        "repeat": rep,
-                        "seed": args.seed + rep,
-                    })
+                for beta in betas:
+                    for steps in steps_list:
+                        for fv in fv_coefs:
+                            for rep in range(args.pareto_repeats):
+                                sweep_configs.append({
+                                    "fitness_scale": fs,
+                                    "entropy_coef": ec,
+                                    "beta": beta,
+                                    "steps": steps,
+                                    "first_variation_coef": fv,
+                                    "repeat": rep,
+                                    "seed": args.seed + rep,
+                                })
         
         print(f"\n[Total configurations: {len(sweep_configs)}]")
         
@@ -876,7 +893,8 @@ def main():
         for cfg_idx, cfg in enumerate(sweep_configs):
             print(f"\n{'='*60}")
             print(f"[Config {cfg_idx+1}/{len(sweep_configs)}]")
-            print(f"  fitness_scale={cfg['fitness_scale']}, entropy_coef={cfg['entropy_coef']}, repeat={cfg['repeat']}")
+            print(f"  fitness_scale={cfg['fitness_scale']}, entropy_coef={cfg['entropy_coef']}, beta={cfg['beta']}")
+            print(f"  steps={cfg['steps']}, first_variation_coef={cfg['first_variation_coef']}, repeat={cfg['repeat']}")
             print("=" * 60)
             
             # Set seed for this run
@@ -888,7 +906,7 @@ def main():
                 torch.cuda.manual_seed_all(run_seed)
             
             # Create output directory for this config
-            cfg_name = f"fs{cfg['fitness_scale']}_ec{cfg['entropy_coef']}_rep{cfg['repeat']}"
+            cfg_name = f"fs{cfg['fitness_scale']}_ec{cfg['entropy_coef']}_b{cfg['beta']}_s{cfg['steps']}_fv{cfg['first_variation_coef']}_rep{cfg['repeat']}"
             cfg_out_dir = os.path.join(args.out_dir, "pareto", cfg_name)
             os.makedirs(cfg_out_dir, exist_ok=True)
             
@@ -935,11 +953,11 @@ def main():
                 grpo_config = GRPOConfig(
                     output_dir=os.path.join(cfg_out_dir, "trainer_output"),
                     num_train_epochs=1,
-                    max_steps=args.steps,
+                    max_steps=cfg['steps'],  # Use sweep config
                     per_device_train_batch_size=args.batch_size,
                     gradient_accumulation_steps=args.gradient_accumulation_steps,
                     learning_rate=args.learning_rate,
-                    beta=args.beta,
+                    beta=cfg['beta'],  # Use sweep config
                     num_generations=args.num_generations,
                     logging_steps=10,
                     save_strategy="no",  # Don't save checkpoints (ProGen config issues)
@@ -1004,14 +1022,14 @@ def main():
                     trainer=trainer,
                     tokenizer=progen2.tokenizer,
                     entropy_coef=cfg["entropy_coef"],
-                    first_variation_coef=args.first_variation_coef,
+                    first_variation_coef=cfg["first_variation_coef"],  # Use sweep config
                     fitness_scale=cfg["fitness_scale"],
                     out_dir=cfg_out_dir,
                 )
                 # Update the wrapper to use the real function
                 reward_wrapper.real_reward_func = reward_func
                 
-                print(f"\n[Training with fitness_scale={cfg['fitness_scale']}, entropy_coef={cfg['entropy_coef']}...]")
+                print(f"\n[Training: fs={cfg['fitness_scale']}, μ={cfg['entropy_coef']}, β={cfg['beta']}, steps={cfg['steps']}, η={cfg['first_variation_coef']}...]")
                 trainer.train()
                 
                 # Evaluate after training
@@ -1033,6 +1051,9 @@ def main():
                     result_entry = {
                         "fitness_scale": cfg["fitness_scale"],
                         "entropy_coef": cfg["entropy_coef"],
+                        "beta": cfg["beta"],
+                        "steps": cfg["steps"],
+                        "first_variation_coef": cfg["first_variation_coef"],
                         "repeat": cfg["repeat"],
                         "seed": cfg["seed"],
                         "mean_fitness": stats.get("mean", 0.0),
