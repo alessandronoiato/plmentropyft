@@ -379,6 +379,9 @@ def make_fitness_reward(
             + first_variation_coef * seq_logp_ref
         )
         
+        # Clamp rewards to non-negative (focus gradient on finding good sequences)
+        total = torch.clamp(total, min=0.0)
+        
         rewards = total.float().cpu().tolist()
         
         # Logging
