@@ -915,6 +915,9 @@ def main():
             if not args.no_wandb:
                 try:
                     import wandb
+                    # Finish any previous run first
+                    if wandb.run is not None:
+                        wandb.finish()
                     wandb_run = wandb.init(
                         project=args.wandb_project,
                         name=f"pareto_{cfg_name}",
@@ -933,8 +936,11 @@ def main():
                         },
                         reinit=True,  # Allow multiple runs in same process
                     )
+                    print(f"[WandB] Started run: {wandb_run.name}")
                 except Exception as e:
                     print(f"[WandB] Warning: {e}")
+                    import traceback
+                    traceback.print_exc()
             
             try:
                 # Initialize components (fresh for each run)
@@ -1114,6 +1120,7 @@ def main():
                 
                 # Finish WandB run for this config
                 if wandb_run:
+                    print(f"[WandB] Finishing run: {wandb_run.name}")
                     wandb_run.finish()
                     wandb_run = None
                 
