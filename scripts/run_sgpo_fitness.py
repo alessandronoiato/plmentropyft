@@ -286,6 +286,10 @@ def main():
                         help="Number of generations per prompt")
     parser.add_argument("--learning_rate", type=float, default=1e-5,
                         help="Learning rate")
+    parser.add_argument("--lr_min", type=float, default=None,
+                        help="Minimum learning rate floor (requires cosine_with_min_lr scheduler)")
+    parser.add_argument("--lr_scheduler_type", type=str, default="linear",
+                        help="LR scheduler: 'linear' (default), 'cosine', 'cosine_with_min_lr', 'constant'")
     parser.add_argument("--beta", type=float, default=0.1,
                         help="KL penalty coefficient (β)")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1,
@@ -568,6 +572,14 @@ def main():
             # Force generation of exactly 389 tokens to prevent collapse to short sequences
             TRPB_SEQ_LENGTH = 389
             
+            # Determine LR scheduler settings
+            lr_scheduler_kwargs = {}
+            if args.lr_min is not None:
+                if args.lr_scheduler_type != "cosine_with_min_lr":
+                    print(f"[Warning] --lr_min requires cosine_with_min_lr scheduler, switching from {args.lr_scheduler_type}")
+                args.lr_scheduler_type = "cosine_with_min_lr"
+                lr_scheduler_kwargs = {"min_lr": args.lr_min}
+            
             grpo_config = GRPOConfig(
                 output_dir=os.path.join(args.out_dir, "trainer_output"),
                 num_train_epochs=1,
@@ -575,6 +587,8 @@ def main():
                 per_device_train_batch_size=args.batch_size,
                 gradient_accumulation_steps=args.gradient_accumulation_steps,
                 learning_rate=args.learning_rate,
+                lr_scheduler_type=args.lr_scheduler_type,
+                lr_scheduler_kwargs=lr_scheduler_kwargs,
                 beta=args.beta,
                 num_generations=args.num_generations,
                 max_completion_length=TRPB_SEQ_LENGTH,  # Generate exactly 389 tokens
@@ -997,6 +1011,13 @@ def main():
                 # Force generation of exactly 389 tokens to prevent collapse to short sequences
                 TRPB_SEQ_LENGTH = 389
                 
+                # Determine LR scheduler settings
+                lr_scheduler_kwargs = {}
+                lr_scheduler_type = args.lr_scheduler_type
+                if args.lr_min is not None:
+                    lr_scheduler_type = "cosine_with_min_lr"
+                    lr_scheduler_kwargs = {"min_lr": args.lr_min}
+                
                 grpo_config = GRPOConfig(
                     output_dir=os.path.join(cfg_out_dir, "trainer_output"),
                     num_train_epochs=1,
@@ -1004,6 +1025,8 @@ def main():
                     per_device_train_batch_size=args.batch_size,
                     gradient_accumulation_steps=args.gradient_accumulation_steps,
                     learning_rate=args.learning_rate,
+                    lr_scheduler_type=lr_scheduler_type,
+                    lr_scheduler_kwargs=lr_scheduler_kwargs,
                     beta=cfg['beta'],  # Use sweep config
                     num_generations=args.num_generations,
                     max_completion_length=TRPB_SEQ_LENGTH,  # Generate exactly 389 tokens
