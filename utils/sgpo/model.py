@@ -156,7 +156,8 @@ class ProGen2Wrapper:
         num_return_sequences: int = 40,
         temperature: float = 1.0,
         top_p: float = 0.95,
-        max_length: int = 487,  # 1.25 * 389
+        max_length: int = 390,  # 1 (BOS) + 389 (TrpB sequence)
+        min_length: int = 390,  # Force exact length to prevent short sequence collapse
     ) -> List[str]:
         """
         Generate protein sequences matching SGPO's sampling method.
@@ -165,7 +166,8 @@ class ProGen2Wrapper:
             num_return_sequences: Batch size for generation
             temperature: Sampling temperature
             top_p: Nucleus sampling threshold
-            max_length: Maximum sequence length
+            max_length: Maximum sequence length (default: 390 = BOS + 389 AA for TrpB)
+            min_length: Minimum sequence length (default: 390 to force full-length)
         
         Returns:
             List of generated sequences (cleaned, with terminal tokens removed)
@@ -190,16 +192,18 @@ class ProGen2Wrapper:
             else:
                 input_ids = torch.tensor([[self.start_token_id]]).to(self.device)
             
-            # Generate
+            # Generate with exact length control
+            # Disable EOS token to prevent early stopping, force full-length generation
             tokens_batch = self.model.generate(
                 input_ids=input_ids,
                 do_sample=True,
                 temperature=temperature,
                 max_length=max_length,
+                min_length=min_length,  # Force minimum length to prevent collapse
                 top_p=top_p,
                 num_return_sequences=num_return_sequences,
                 pad_token_id=self.pad_token_id,
-                eos_token_id=self.end_token_id,  # '2' = 4
+                eos_token_id=None,  # Disable EOS to force full-length generation
             )
             
             # Decode using raw tokenizer if available

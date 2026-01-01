@@ -564,6 +564,10 @@ def main():
             
             # Training config - use bf16 only on CUDA
             use_bf16 = torch.cuda.is_available()
+            # TrpB is exactly 389 amino acids, 1 token = 1 AA
+            # Force generation of exactly 389 tokens to prevent collapse to short sequences
+            TRPB_SEQ_LENGTH = 389
+            
             grpo_config = GRPOConfig(
                 output_dir=os.path.join(args.out_dir, "trainer_output"),
                 num_train_epochs=1,
@@ -573,6 +577,8 @@ def main():
                 learning_rate=args.learning_rate,
                 beta=args.beta,
                 num_generations=args.num_generations,
+                max_completion_length=TRPB_SEQ_LENGTH,  # Generate exactly 389 tokens
+                generation_kwargs={"min_new_tokens": TRPB_SEQ_LENGTH},  # Force min length
                 logging_steps=10,
                 save_steps=max(args.steps // 5, 1),
                 report_to="wandb" if not args.no_wandb else "none",
@@ -982,6 +988,11 @@ def main():
                 from datasets import Dataset
                 
                 use_bf16 = torch.cuda.is_available()
+                
+                # TrpB is exactly 389 amino acids, 1 token = 1 AA
+                # Force generation of exactly 389 tokens to prevent collapse to short sequences
+                TRPB_SEQ_LENGTH = 389
+                
                 grpo_config = GRPOConfig(
                     output_dir=os.path.join(cfg_out_dir, "trainer_output"),
                     num_train_epochs=1,
@@ -991,6 +1002,8 @@ def main():
                     learning_rate=args.learning_rate,
                     beta=cfg['beta'],  # Use sweep config
                     num_generations=args.num_generations,
+                    max_completion_length=TRPB_SEQ_LENGTH,  # Generate exactly 389 tokens
+                    generation_kwargs={"min_new_tokens": TRPB_SEQ_LENGTH},  # Force min length
                     logging_steps=10,
                     save_strategy="no",  # Don't save checkpoints (ProGen config issues)
                     report_to="wandb" if wandb_run else "none",
