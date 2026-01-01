@@ -894,6 +894,10 @@ def main():
         device = "cuda" if torch.cuda.is_available() else "cpu"
         pareto_results = []
         
+        # Pre-register model class patching (do once before loop to avoid recursion)
+        _model_class_patched = False
+        _original_tf_getattr = None
+        
         # Run each configuration
         # Note: π = trainer.model (current policy), π_base = trainer.ref_model (frozen at start)
         for cfg_idx, cfg in enumerate(sweep_configs):
@@ -1017,18 +1021,21 @@ def main():
                 prompts = ["1"] * args.batch_size
                 train_ds = Dataset.from_dict({"prompt": prompts})
                 
-                # Register model class for TRL
+                # Register model class for TRL (only patch once to avoid recursion)
                 import transformers
                 import transformers.utils.import_utils as _tf_import_utils
                 _model_cls = progen2.model.__class__
                 _model_cls_name = _model_cls.__name__
-                _custom_classes = {_model_cls_name: _model_cls, "ProGenForCausalLM": _model_cls}
-                _original_getattr = _tf_import_utils._LazyModule.__getattr__
-                def _patched_getattr(self, name):
-                    if name in _custom_classes:
-                        return _custom_classes[name]
-                    return _original_getattr(self, name)
-                _tf_import_utils._LazyModule.__getattr__ = _patched_getattr
+                
+                if not _model_class_patched:
+                    _original_tf_getattr = _tf_import_utils._LazyModule.__getattr__
+                    _custom_classes = {_model_cls_name: _model_cls, "ProGenForCausalLM": _model_cls}
+                    def _patched_getattr(self, name):
+                        if name in _custom_classes:
+                            return _custom_classes[name]
+                        return _original_tf_getattr(self, name)
+                    _tf_import_utils._LazyModule.__getattr__ = _patched_getattr
+                    _model_class_patched = True
                 
                 # Create a mutable wrapper that will hold the real reward function
                 # This allows us to pass it to trainer, then update it after trainer is created
