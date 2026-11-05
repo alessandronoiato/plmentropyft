@@ -416,7 +416,7 @@ def main():
     try:
         if bool(getattr(args, "compute_vendi", False)):
             # Internal device selection (no CLI): prefer CUDA if available
-                vendi_device = "cuda" if (torch.cuda.is_available() and torch.cuda.device_count() > 0) else "cpu"
+            vendi_device = "cuda" if (torch.cuda.is_available() and torch.cuda.device_count() > 0) else "cpu"
             # Weighted sequences and optional weighted subsample
             def _extract_sequences_and_weights(seqs: List[Tuple[str, float]]) -> Tuple[List[str], List[float]]:
                 s_list = [a for a, _ in seqs]
@@ -447,7 +447,7 @@ def main():
                     seqs_b, weights_b = _weighted_subsample(seqs_b, weights_b, int(args.vendi_max_sequences))
                 vendi_b = vendi_from_sequences(
                     seqs_b,
-                weights=weights_b,
+                    weights=weights_b,
                     model_name=str(args.vendi_model),
                     device=vendi_device,
                     dtype=str(args.vendi_dtype),
@@ -463,7 +463,7 @@ def main():
                     seqs_b,
                     weights=None,
                     model_name=str(args.vendi_model),
-                device=vendi_device,
+                    device=vendi_device,
                     dtype=str(args.vendi_dtype),
                     batch_size=int(args.vendi_batch_size),
                     kernel=str(args.vendi_kernel),
@@ -476,7 +476,7 @@ def main():
                     seqs_a, weights_a = _weighted_subsample(seqs_a, weights_a, int(args.vendi_max_sequences))
                 vendi_a = vendi_from_sequences(
                     seqs_a,
-                weights=weights_a,
+                    weights=weights_a,
                     model_name=str(args.vendi_model),
                     device=vendi_device,
                     dtype=str(args.vendi_dtype),
@@ -491,12 +491,12 @@ def main():
                     seqs_a,
                     weights=None,
                     model_name=str(args.vendi_model),
-                device=vendi_device,
+                    device=vendi_device,
                     dtype=str(args.vendi_dtype),
                     batch_size=int(args.vendi_batch_size),
                     kernel=str(args.vendi_kernel),
                     sigma=None if args.vendi_sigma is None else float(args.vendi_sigma),
-            )
+                )
             # Update report with Vendi metrics and context
             report.update({
                 "before_vendi_score": float(vendi_b.get("vendi_score", float("nan"))),
@@ -575,8 +575,8 @@ def main():
                 "hausdorff_post_to_pre_q": float(post_to_pre_q),
                 "hausdorff_symmetric_q": float(sym_q),
             })
-            except Exception:
-                pass
+    except Exception:
+        pass
     # (Removed) Vendi diversity computation
     # When esmfold validity is active, summarize pLDDT
     if args.validity_mode == "esmfold":
@@ -620,8 +620,8 @@ def main():
 
     # Write JSON unless disabled
     if not args.no_json_report:
-    with open(os.path.join(args.out_dir, "grpo_exact_entropy.json"), "w") as f:
-        json.dump(report, f, indent=2)
+        with open(os.path.join(args.out_dir, "grpo_exact_entropy.json"), "w") as f:
+            json.dump(report, f, indent=2)
     # 'after_sequence_probs.csv' already written by dump_sequence_probs
     try:
         wandb_finish(wandb_run)
